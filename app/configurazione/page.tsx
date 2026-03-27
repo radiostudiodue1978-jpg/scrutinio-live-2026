@@ -1,0 +1,977 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+
+const API_BASE = 'https://diretta-radio-api.francesco-statello88.workers.dev'
+
+type SessionUser = {
+  id: string
+  username: string
+  role: 'admin' | 'operatore'
+  sezioni: number[]
+}
+
+type ConfigSection = 'nomi' | 'login' | 'elezione' | 'critica'
+
+type UserItem = {
+  id: string
+  username: string
+  password: string
+  role: 'admin' | 'operatore'
+  sezioni: number[]
+}
+
+type ConfigData = {
+  sindaco1: string
+  sindaco2: string
+  lista1: string
+  lista2: string
+  consiglieri1: string[]
+  consiglieri2: string[]
+  elettoriSezioni: number[]
+}
+
+type DbUserRow = {
+  id: string
+  username: string
+  password: string
+  role: 'admin' | 'operatore'
+  sezioni: number[] | null
+}
+
+export default function ConfigurazionePage() {
+  const router = useRouter()
+
+  const [authChecked, setAuthChecked] = useState(false)
+
+  const [section, setSection] = useState<ConfigSection>('nomi')
+
+  const [sindaco1, setSindaco1] = useState('')
+  const [sindaco2, setSindaco2] = useState('')
+  const [lista1, setLista1] = useState('')
+  const [lista2, setLista2] = useState('')
+
+  const [consiglieri1, setConsiglieri1] = useState<string[]>(Array(12).fill(''))
+  const [consiglieri2, setConsiglieri2] = useState<string[]>(Array(12).fill(''))
+
+  const [elettoriSezioni, setElettoriSezioni] = useState<string[]>(Array(6).fill(''))
+
+  const [totaleSezioni, setTotaleSezioni] = useState('6')
+  const [annoElezione, setAnnoElezione] = useState('2026')
+  const [plesso1Nome, setPlesso1Nome] = useState('Scuola Elementare')
+  const [plesso1Sezioni, setPlesso1Sezioni] = useState('1,2,3,4')
+  const [plesso2Nome, setPlesso2Nome] = useState('Asilo Via Napoli')
+  const [plesso2Sezioni, setPlesso2Sezioni] = useState('5,6')
+
+  const [users, setUsers] = useState<UserItem[]>([])
+  const [usersLoading, setUsersLoading] = useState(false)
+  const [usersError, setUsersError] = useState('')
+
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newRole, setNewRole] = useState<'admin' | 'operatore'>('operatore')
+  const [newSezioni, setNewSezioni] = useState('')
+
+  const [showSaved, setShowSaved] = useState(false)
+  const [showDeleteConfig, setShowDeleteConfig] = useState(false)
+  const [showDangerConfirm, setShowDangerConfirm] = useState(false)
+  const [dangerText, setDangerText] = useState('')
+  const [dangerLoading, setDangerLoading] = useState(false)
+
+  useEffect(() => {
+    const rawSession = localStorage.getItem('session')
+
+    if (!rawSession) {
+      router.replace('/login')
+      return
+    }
+
+    try {
+      const parsed = JSON.parse(rawSession) as SessionUser
+
+      if (parsed.role !== 'admin') {
+        router.replace('/seggi')
+        return
+      }
+
+      setAuthChecked(true)
+
+      loadLocalConfig()
+      loadElectionSettings()
+      loadUsers()
+    } catch {
+      localStorage.removeItem('session')
+      router.replace('/login')
+    }
+  }, [router])
+
+  function loadLocalConfig() {
+    const saved = localStorage.getItem('config')
+    if (!saved) return
+
+    try {
+      const parsed = JSON.parse(saved) as ConfigData
+      setSindaco1(parsed.sindaco1 || '')
+      setSindaco2(parsed.sindaco2 || '')
+      setLista1(parsed.lista1 || '')
+      setLista2(parsed.lista2 || '')
+      setConsiglieri1(
+        Array.isArray(parsed.consiglieri1)
+          ? [...parsed.consiglieri1, ...Array(12).fill('')].slice(0, 12)
+          : Array(12).fill('')
+      )
+      setConsiglieri2(
+        Array.isArray(parsed.consiglieri2)
+          ? [...parsed.consiglieri2, ...Array(12).fill('')].slice(0, 12)
+          : Array(12).fill('')
+      )
+      setElettoriSezioni(
+        Array.isArray(parsed.elettoriSezioni)
+          ? [...parsed.elettoriSezioni.map((v) => String(v ?? '')), ...Array(6).fill('')].slice(0, 6)
+          : Array(6).fill('')
+      )
+    } catch {}
+  }
+
+  function loadElectionSettings() {
+    const saved = localStorage.getItem('election-settings')
+    if (!saved) return
+
+    try {
+      const parsed = JSON.parse(saved)
+      setTotaleSezioni(parsed.totaleSezioni || '6')
+      setAnnoElezione(parsed.annoElezione || '2026')
+      setPlesso1Nome(parsed.plesso1Nome || 'Scuola Elementare')
+      setPlesso1Sezioni(parsed.plesso1Sezioni || '1,2,3,4')
+      setPlesso2Nome(parsed.plesso2Nome || 'Asilo Via Napoli')
+      setPlesso2Sezioni(parsed.plesso2Sezioni || '5,6')
+
+      if (Array.isArray(parsed.elettoriSezioni)) {
+        setElettoriSezioni(
+          [...parsed.elettoriSezioni.map((v: number | string) => String(v ?? '')), ...Array(6).fill('')].slice(0, 6)
+        )
+      }
+    } catch {}
+  }
+
+  async function loadUsers() {
+    try {
+      setUsersLoading(true)
+      setUsersError('')
+
+      const { data, error } = await supabase
+        .from('utenti_accesso')
+        .select('id, username, password, role, sezioni')
+        .order('username', { ascending: true })
+
+      if (error) {
+        throw new Error(error.message)
+      }
+
+      const normalized: UserItem[] = ((data || []) as DbUserRow[]).map((user) => ({
+        id: user.id,
+        username: user.username,
+        password: user.password,
+        role: user.role,
+        sezioni: user.role === 'admin' ? [] : uniqNumbers(user.sezioni || []),
+      }))
+
+      setUsers(normalized)
+    } catch (err) {
+      setUsers([])
+      setUsersError(err instanceof Error ? err.message : 'Errore caricamento utenti')
+    } finally {
+      setUsersLoading(false)
+    }
+  }
+
+  function updateCons1(index: number, value: string) {
+    setConsiglieri1((prev) => {
+      const copy = [...prev]
+      copy[index] = value
+      return copy
+    })
+  }
+
+  function updateCons2(index: number, value: string) {
+    setConsiglieri2((prev) => {
+      const copy = [...prev]
+      copy[index] = value
+      return copy
+    })
+  }
+
+  function updateElettori(index: number, value: string) {
+    setElettoriSezioni((prev) => {
+      const copy = [...prev]
+      copy[index] = value.replace(/[^\d]/g, '')
+      return copy
+    })
+  }
+
+  function pulseSaved() {
+    setShowSaved(true)
+    setTimeout(() => {
+      setShowSaved(false)
+    }, 1800)
+  }
+
+  async function saveConfigToServer() {
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sindaco1,
+        sindaco2,
+        lista1,
+        lista2,
+        consiglieri1,
+        consiglieri2,
+        elettori_sezioni: elettoriSezioni.map((v) => Number(v || 0)),
+      }),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (!res.ok || !data?.ok) {
+      throw new Error(
+        typeof data?.error === 'string'
+          ? data.error
+          : 'Errore salvataggio configurazione server'
+      )
+    }
+
+    return data
+  }
+
+  function syncConfigWithLocalStorage(partial: Partial<ConfigData>) {
+    try {
+      const raw = localStorage.getItem('config')
+      const existing: ConfigData = raw
+        ? JSON.parse(raw)
+        : {
+            sindaco1: '',
+            sindaco2: '',
+            lista1: '',
+            lista2: '',
+            consiglieri1: Array(12).fill(''),
+            consiglieri2: Array(12).fill(''),
+            elettoriSezioni: Array(6).fill(0),
+          }
+
+      const updated: ConfigData = {
+        ...existing,
+        ...partial,
+      }
+
+      localStorage.setItem('config', JSON.stringify(updated))
+    } catch {}
+  }
+
+  async function handleSaveNames() {
+    const data: ConfigData = {
+      sindaco1,
+      sindaco2,
+      lista1,
+      lista2,
+      consiglieri1,
+      consiglieri2,
+      elettoriSezioni: elettoriSezioni.map((v) => Number(v || 0)),
+    }
+
+    try {
+      localStorage.setItem('config', JSON.stringify(data))
+      await saveConfigToServer()
+      pulseSaved()
+    } catch (err) {
+      alert(`Salvataggio configurazione server fallito: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  function handleDeleteConfig() {
+    try {
+      const raw = localStorage.getItem('config')
+      const existing: ConfigData = raw
+        ? JSON.parse(raw)
+        : {
+            sindaco1: '',
+            sindaco2: '',
+            lista1: '',
+            lista2: '',
+            consiglieri1: Array(12).fill(''),
+            consiglieri2: Array(12).fill(''),
+            elettoriSezioni: elettoriSezioni.map((v) => Number(v || 0)),
+          }
+
+      const updated: ConfigData = {
+        ...existing,
+        sindaco1: '',
+        sindaco2: '',
+        lista1: '',
+        lista2: '',
+        consiglieri1: Array(12).fill(''),
+        consiglieri2: Array(12).fill(''),
+      }
+
+      localStorage.setItem('config', JSON.stringify(updated))
+    } catch {
+      localStorage.removeItem('config')
+    }
+
+    setSindaco1('')
+    setSindaco2('')
+    setLista1('')
+    setLista2('')
+    setConsiglieri1(Array(12).fill(''))
+    setConsiglieri2(Array(12).fill(''))
+
+    setShowDeleteConfig(false)
+  }
+
+  async function handleSaveElectionSettings() {
+    const normalizedElettori = elettoriSezioni.map((v) => Number(v || 0))
+
+    try {
+      localStorage.setItem(
+        'election-settings',
+        JSON.stringify({
+          totaleSezioni,
+          annoElezione,
+          plesso1Nome,
+          plesso1Sezioni,
+          plesso2Nome,
+          plesso2Sezioni,
+          elettoriSezioni: normalizedElettori,
+        })
+      )
+
+      syncConfigWithLocalStorage({
+        elettoriSezioni: normalizedElettori,
+      })
+
+      await saveConfigToServer()
+      pulseSaved()
+    } catch (err) {
+      alert(`Salvataggio impostazioni elezione fallito: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  function parseSezioniInput(value: string) {
+    return uniqNumbers(
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  }
+
+  function uniqNumbers(values: number[]) {
+    return Array.from(new Set(values)).sort((a, b) => a - b)
+  }
+
+  async function handleAddUser() {
+    if (!newUsername.trim() || !newPassword.trim()) return
+
+    try {
+      setUsersError('')
+
+      const parsedSezioni = newRole === 'admin' ? [] : parseSezioniInput(newSezioni)
+
+      const { error } = await supabase.from('utenti_accesso').insert({
+        username: newUsername.trim(),
+        password: newPassword.trim(),
+        role: newRole,
+        sezioni: parsedSezioni,
+      })
+
+      if (error) {
+        throw new Error(error.message)
+      }
+
+      setNewUsername('')
+      setNewPassword('')
+      setNewRole('operatore')
+      setNewSezioni('')
+
+      await loadUsers()
+      pulseSaved()
+    } catch (err) {
+      alert(`Creazione utente fallita: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleDeleteUser(id: string) {
+    try {
+      setUsersError('')
+
+      const { error } = await supabase
+        .from('utenti_accesso')
+        .delete()
+        .eq('id', id)
+
+      if (error) {
+        throw new Error(error.message)
+      }
+
+      await loadUsers()
+      pulseSaved()
+    } catch (err) {
+      alert(`Eliminazione utente fallita: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  async function handleDangerReset() {
+    if (dangerText !== 'CANCELLA TUTTO') return
+
+    try {
+      setDangerLoading(true)
+
+      const res = await fetch(`${API_BASE}/api/reset`, {
+        method: 'POST',
+      })
+
+      const data = await res.json()
+
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || 'Errore reset database')
+      }
+
+      localStorage.removeItem('successful-submissions')
+
+      const total = Number(totaleSezioni || 6)
+      for (let i = 1; i <= total; i += 1) {
+        localStorage.removeItem(`draft-sezione-${i}`)
+      }
+
+      setDangerText('')
+      setShowDangerConfirm(false)
+      pulseSaved()
+    } catch (err) {
+      alert(`Reset fallito: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setDangerLoading(false)
+    }
+  }
+
+  const totaleElettoriConfigurati = useMemo(() => {
+    return elettoriSezioni.reduce((sum, value) => sum + Number(value || 0), 0)
+  }, [elettoriSezioni])
+
+  if (!authChecked) {
+    return (
+      <div className="rounded-2xl bg-white p-6 shadow-sm">
+        <div className="text-sm font-bold text-slate-600">Controllo accessi amministratore...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+      <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="space-y-2">
+          <ConfigMenuButton
+            active={section === 'nomi'}
+            onClick={() => setSection('nomi')}
+            label="Imposta nomi"
+            tone="blue"
+          />
+          <ConfigMenuButton
+            active={section === 'login'}
+            onClick={() => setSection('login')}
+            label="Login e permessi"
+            tone="violet"
+          />
+          <ConfigMenuButton
+            active={section === 'elezione'}
+            onClick={() => setSection('elezione')}
+            label="Impostazioni elezione"
+            tone="amber"
+          />
+          <ConfigMenuButton
+            active={section === 'critica'}
+            onClick={() => setSection('critica')}
+            label="Area critica"
+            tone="red"
+          />
+        </div>
+      </aside>
+
+      <main className="space-y-4">
+        {section === 'nomi' && (
+          <>
+            <Box title="Sindaci e Liste" color="blue">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Sindaci
+                  </div>
+                  <div className="space-y-2">
+                    <TextInput value={sindaco1} onChange={setSindaco1} placeholder="Nome Sindaco 1" />
+                    <TextInput value={sindaco2} onChange={setSindaco2} placeholder="Nome Sindaco 2" />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Liste
+                  </div>
+                  <div className="space-y-2">
+                    <TextInput value={lista1} onChange={setLista1} placeholder="Nome Lista X" />
+                    <TextInput value={lista2} onChange={setLista2} placeholder="Nome Lista Y" />
+                  </div>
+                </div>
+              </div>
+            </Box>
+
+            <Box title="Consiglieri Lista X" color="amber">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {consiglieri1.map((value, index) => (
+                  <TextInput
+                    key={index}
+                    value={value}
+                    onChange={(v) => updateCons1(index, v)}
+                    placeholder={`Cons. ${index + 1}`}
+                  />
+                ))}
+              </div>
+            </Box>
+
+            <Box title="Consiglieri Lista Y" color="rose">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {consiglieri2.map((value, index) => (
+                  <TextInput
+                    key={index}
+                    value={value}
+                    onChange={(v) => updateCons2(index, v)}
+                    placeholder={`Cons. ${index + 1}`}
+                  />
+                ))}
+              </div>
+            </Box>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <button
+                onClick={handleSaveNames}
+                className="w-full rounded-xl bg-green-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-green-700"
+              >
+                Salva configurazione
+              </button>
+
+              <button
+                onClick={() => setShowDeleteConfig(true)}
+                className="w-full rounded-xl bg-red-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-red-700"
+              >
+                Cancella configurazione
+              </button>
+            </div>
+          </>
+        )}
+
+        {section === 'login' && (
+          <>
+            <Box title="Crea utente" color="blue">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput
+                  value={newUsername}
+                  onChange={setNewUsername}
+                  placeholder="Username"
+                />
+                <TextInput
+                  value={newPassword}
+                  onChange={setNewPassword}
+                  placeholder="Password"
+                />
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <SelectInput
+                  value={newRole}
+                  onChange={(v) => setNewRole(v as 'admin' | 'operatore')}
+                  options={[
+                    { label: 'Operatore', value: 'operatore' },
+                    { label: 'Admin', value: 'admin' },
+                  ]}
+                />
+
+                <TextInput
+                  value={newSezioni}
+                  onChange={setNewSezioni}
+                  placeholder="Sezioni assegnate es. 1,2,3,4"
+                />
+
+                <button
+                  onClick={handleAddUser}
+                  className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-violet-700"
+                >
+                  Aggiungi utente
+                </button>
+              </div>
+
+              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <div className="font-bold text-slate-800">Regola accessi</div>
+                <div className="mt-1">
+                  Per gli operatori puoi assegnare una o più sezioni separate da virgola.
+                  Esempio: <span className="font-bold">1,2,3,4</span>
+                </div>
+                <div className="mt-1">
+                  Gli admin ignorano il campo sezioni e vedono tutto.
+                </div>
+              </div>
+            </Box>
+
+            <Box title="Utenti creati" color="amber">
+              {usersError && (
+                <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                  Errore utenti: {usersError}
+                </div>
+              )}
+
+              {usersLoading ? (
+                <div className="text-sm text-slate-500">Caricamento utenti...</div>
+              ) : users.length === 0 ? (
+                <div className="text-sm text-slate-500">Nessun utente creato</div>
+              ) : (
+                <div className="space-y-2">
+                  {users.map((user) => (
+                    <div
+                      key={user.id}
+                      className="flex flex-col gap-2 rounded-xl bg-slate-50 p-3 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900">{user.username}</div>
+                        <div className="text-sm text-slate-500">
+                          Ruolo: {user.role}
+                          {user.role === 'operatore'
+                            ? ` • Sezioni: ${user.sezioni.length > 0 ? user.sezioni.join(', ') : '-'}`
+                            : ' • Accesso completo'}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteUser(user.id)}
+                        className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700"
+                      >
+                        Elimina
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Box>
+          </>
+        )}
+
+        {section === 'elezione' && (
+          <>
+            <Box title="Impostazioni generali elezione" color="blue">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput
+                  value={annoElezione}
+                  onChange={setAnnoElezione}
+                  placeholder="Anno elezione"
+                />
+                <TextInput
+                  value={totaleSezioni}
+                  onChange={setTotaleSezioni}
+                  placeholder="Totale sezioni"
+                />
+              </div>
+            </Box>
+
+            <Box title="Plesso 1" color="amber">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput
+                  value={plesso1Nome}
+                  onChange={setPlesso1Nome}
+                  placeholder="Nome plesso 1"
+                />
+                <TextInput
+                  value={plesso1Sezioni}
+                  onChange={setPlesso1Sezioni}
+                  placeholder="Sezioni plesso 1 es. 1,2,3,4"
+                />
+              </div>
+            </Box>
+
+            <Box title="Plesso 2" color="rose">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput
+                  value={plesso2Nome}
+                  onChange={setPlesso2Nome}
+                  placeholder="Nome plesso 2"
+                />
+                <TextInput
+                  value={plesso2Sezioni}
+                  onChange={setPlesso2Sezioni}
+                  placeholder="Sezioni plesso 2 es. 5,6"
+                />
+              </div>
+            </Box>
+
+            <Box title="Elettori per sezione" color="blue">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {Array.from({ length: 6 }, (_, index) => (
+                  <NumberInput
+                    key={index}
+                    value={elettoriSezioni[index] || ''}
+                    onChange={(v) => updateElettori(index, v)}
+                    placeholder={`Elettori sezione ${index + 1}`}
+                    label={`Sezione ${index + 1}`}
+                  />
+                ))}
+              </div>
+
+              <div className="mt-4 rounded-xl bg-slate-50 px-4 py-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Totale elettori configurati
+                </div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {totaleElettoriConfigurati}
+                </div>
+              </div>
+            </Box>
+
+            <button
+              onClick={handleSaveElectionSettings}
+              className="w-full rounded-xl bg-green-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-green-700"
+            >
+              Salva impostazioni elezione
+            </button>
+          </>
+        )}
+
+        {section === 'critica' && (
+          <>
+            <Box title="Area critica" color="red">
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <div className="text-lg font-bold text-red-800">Zona pericolosa</div>
+                <p className="mt-2 text-sm text-red-700">
+                  Qui puoi cancellare tutti i dati test locali e il database live 2026.
+                  Usa questo comando solo quando sei sicuro.
+                </p>
+
+                <div className="mt-4">
+                  <button
+                    onClick={() => setShowDangerConfirm(true)}
+                    className="rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-red-700"
+                  >
+                    Reset completo dati test
+                  </button>
+                </div>
+              </div>
+            </Box>
+          </>
+        )}
+      </main>
+
+      {showSaved && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="rounded-2xl bg-white px-8 py-7 text-center shadow-2xl">
+            <div className="mb-2 text-3xl">✅</div>
+            <div className="text-lg font-bold text-slate-800">Operazione salvata</div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="text-xl font-bold text-slate-900">Sei sicuro?</div>
+            <p className="mt-2 text-sm text-slate-600">
+              Vuoi cancellare tutti i dati della configurazione candidati, liste e consiglieri?
+            </p>
+
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setShowDeleteConfig(false)}
+                className="rounded-xl bg-slate-200 px-4 py-3 font-bold text-slate-800 hover:bg-slate-300"
+              >
+                Annulla
+              </button>
+
+              <button
+                onClick={handleDeleteConfig}
+                className="rounded-xl bg-red-600 px-4 py-3 font-bold text-white hover:bg-red-700"
+              >
+                Sì, cancella
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDangerConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="text-xl font-bold text-slate-900">Conferma reset completo</div>
+            <p className="mt-2 text-sm text-slate-600">
+              Per continuare scrivi esattamente:
+              <span className="ml-1 font-bold text-red-700">CANCELLA TUTTO</span>
+            </p>
+
+            <div className="mt-4">
+              <TextInput
+                value={dangerText}
+                onChange={setDangerText}
+                placeholder="Scrivi CANCELLA TUTTO"
+              />
+            </div>
+
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => {
+                  setShowDangerConfirm(false)
+                  setDangerText('')
+                }}
+                className="rounded-xl bg-slate-200 px-4 py-3 font-bold text-slate-800 hover:bg-slate-300"
+              >
+                Annulla
+              </button>
+
+              <button
+                onClick={handleDangerReset}
+                disabled={dangerText !== 'CANCELLA TUTTO' || dangerLoading}
+                className={`rounded-xl px-4 py-3 font-bold text-white ${
+                  dangerText !== 'CANCELLA TUTTO' || dangerLoading
+                    ? 'cursor-not-allowed bg-slate-400'
+                    : 'bg-red-600 hover:bg-red-700'
+                }`}
+              >
+                {dangerLoading ? 'Reset in corso...' : 'Conferma reset'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ConfigMenuButton({
+  active,
+  onClick,
+  label,
+  tone,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+  tone: 'blue' | 'violet' | 'amber' | 'red'
+}) {
+  const tones = {
+    blue: 'border-blue-500',
+    violet: 'border-violet-500',
+    amber: 'border-amber-500',
+    red: 'border-red-500',
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      className={`block w-full rounded-xl border-l-4 px-4 py-3 text-left text-sm font-bold transition ${
+        active
+          ? `bg-slate-900 text-white ${tones[tone]}`
+          : 'border-transparent bg-slate-100 text-slate-700 hover:bg-slate-200'
+      }`}
+    >
+      {label}
+    </button>
+  )
+}
+
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+}) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+    />
+  )
+}
+
+function NumberInput({
+  value,
+  onChange,
+  placeholder,
+  label,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+  label: string
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-semibold text-slate-700">
+        {label}
+      </label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ''))}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+      />
+    </div>
+  )
+}
+
+function SelectInput({
+  value,
+  onChange,
+  options,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: { label: string; value: string }[]
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
+    >
+      {options.map((item) => (
+        <option key={item.value} value={item.value}>
+          {item.label}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+function Box({
+  title,
+  color,
+  children,
+}: {
+  title: string
+  color: 'blue' | 'amber' | 'rose' | 'red'
+  children: React.ReactNode
+}) {
+  const map = {
+    blue: 'bg-blue-100 text-blue-700',
+    amber: 'bg-amber-100 text-amber-700',
+    rose: 'bg-rose-100 text-rose-700',
+    red: 'bg-red-100 text-red-700',
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className={`px-4 py-3 font-bold ${map[color]}`}>{title}</div>
+      <div className="p-4">{children}</div>
+    </div>
+  )
+}
