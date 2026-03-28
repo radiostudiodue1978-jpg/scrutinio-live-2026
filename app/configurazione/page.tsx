@@ -41,10 +41,69 @@ type DbUserRow = {
   sezioni: number[] | null
 }
 
+type ServerConfigResponse = {
+  ok?: boolean
+  config?: {
+    anno?: number | string | null
+    totale_sezioni?: number | string | null
+    sindaco1?: string | null
+    sindaco2?: string | null
+    lista1?: string | null
+    lista2?: string | null
+    consiglieri_lista1?: string[] | null
+    consiglieri_lista2?: string[] | null
+    elettori_sezioni?: number[] | null
+    plesso1_nome?: string | null
+    plesso1_sezioni?: number[] | string | null
+    plesso2_nome?: string | null
+    plesso2_sezioni?: number[] | string | null
+  } | null
+}
+
+const EMPTY_12 = Array(12).fill('')
+const EMPTY_6_STR = Array(6).fill('')
+const EMPTY_6_NUM = Array(6).fill(0)
+
+function safeString(value: unknown, fallback = '') {
+  return typeof value === 'string' ? value : fallback
+}
+
+function safeStringArray(value: unknown, length: number) {
+  if (!Array.isArray(value)) return Array(length).fill('')
+  return [...value.map((v) => (typeof v === 'string' ? v : '')), ...Array(length).fill('')].slice(0, length)
+}
+
+function safeNumberArrayToString(value: unknown, length: number) {
+  if (!Array.isArray(value)) return Array(length).fill('')
+  return [...value.map((v) => String(v ?? '')), ...Array(length).fill('')].slice(0, length)
+}
+
+function normalizeSezioniText(value: unknown, fallback: string) {
+  if (Array.isArray(value)) {
+    const arr = value
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0)
+
+    return arr.length > 0 ? arr.join(',') : fallback
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return value
+  }
+
+  return fallback
+}
+
+function uniqNumbers(values: number[]) {
+  return Array.from(new Set(values)).sort((a, b) => a - b)
+}
+
 export default function ConfigurazionePage() {
   const router = useRouter()
 
   const [authChecked, setAuthChecked] = useState(false)
+  const [pageLoading, setPageLoading] = useState(true)
+  const [pageError, setPageError] = useState('')
 
   const [section, setSection] = useState<ConfigSection>('nomi')
 
@@ -53,10 +112,10 @@ export default function ConfigurazionePage() {
   const [lista1, setLista1] = useState('')
   const [lista2, setLista2] = useState('')
 
-  const [consiglieri1, setConsiglieri1] = useState<string[]>(Array(12).fill(''))
-  const [consiglieri2, setConsiglieri2] = useState<string[]>(Array(12).fill(''))
+  const [consiglieri1, setConsiglieri1] = useState<string[]>([...EMPTY_12])
+  const [consiglieri2, setConsiglieri2] = useState<string[]>([...EMPTY_12])
 
-  const [elettoriSezioni, setElettoriSezioni] = useState<string[]>(Array(6).fill(''))
+  const [elettoriSezioni, setElettoriSezioni] = useState<string[]>([...EMPTY_6_STR])
 
   const [totaleSezioni, setTotaleSezioni] = useState('6')
   const [annoElezione, setAnnoElezione] = useState('2026')
@@ -81,29 +140,51 @@ export default function ConfigurazionePage() {
   const [dangerLoading, setDangerLoading] = useState(false)
 
   useEffect(() => {
-    const rawSession = localStorage.getItem('session')
+    let mounted = true
 
-    if (!rawSession) {
-      router.replace('/login')
-      return
-    }
+    async function bootstrap() {
+      const rawSession = localStorage.getItem('session')
 
-    try {
-      const parsed = JSON.parse(rawSession) as SessionUser
-
-      if (parsed.role !== 'admin') {
-        router.replace('/seggi')
+      if (!rawSession) {
+        router.replace('/login')
         return
       }
 
-      setAuthChecked(true)
+      try {
+        const parsed = JSON.parse(rawSession) as SessionUser
 
-      loadLocalConfig()
-      loadElectionSettings()
-      loadUsers()
-    } catch {
-      localStorage.removeItem('session')
-      router.replace('/login')
+        if (parsed.role !== 'admin') {
+          router.replace('/seggi')
+          return
+        }
+
+        if (!mounted) return
+
+        setAuthChecked(true)
+        setPageError('')
+
+        loadLocalConfig()
+        loadElectionSettings()
+
+        await Promise.allSettled([
+          loadServerConfig(),
+          loadUsers(),
+        ])
+      } catch {
+        localStorage.removeItem('session')
+        router.replace('/login')
+        return
+      } finally {
+        if (mounted) {
+          setPageLoading(false)
+        }
+      }
+    }
+
+    bootstrap()
+
+    return () => {
+      mounted = false
     }
   }, [router])
 
@@ -112,27 +193,18 @@ export default function ConfigurazionePage() {
     if (!saved) return
 
     try {
-      const parsed = JSON.parse(saved) as ConfigData
-      setSindaco1(parsed.sindaco1 || '')
-      setSindaco2(parsed.sindaco2 || '')
-      setLista1(parsed.lista1 || '')
-      setLista2(parsed.lista2 || '')
-      setConsiglieri1(
-        Array.isArray(parsed.consiglieri1)
-          ? [...parsed.consiglieri1, ...Array(12).fill('')].slice(0, 12)
-          : Array(12).fill('')
-      )
-      setConsiglieri2(
-        Array.isArray(parsed.consiglieri2)
-          ? [...parsed.consiglieri2, ...Array(12).fill('')].slice(0, 12)
-          : Array(12).fill('')
-      )
-      setElettoriSezioni(
-        Array.isArray(parsed.elettoriSezioni)
-          ? [...parsed.elettoriSezioni.map((v) => String(v ?? '')), ...Array(6).fill('')].slice(0, 6)
-          : Array(6).fill('')
-      )
-    } catch {}
+      const parsed = JSON.parse(saved) as Partial<ConfigData>
+
+      setSindaco1(safeString(parsed.sindaco1))
+      setSindaco2(safeString(parsed.sindaco2))
+      setLista1(safeString(parsed.lista1))
+      setLista2(safeString(parsed.lista2))
+      setConsiglieri1(safeStringArray(parsed.consiglieri1, 12))
+      setConsiglieri2(safeStringArray(parsed.consiglieri2, 12))
+      setElettoriSezioni(safeNumberArrayToString(parsed.elettoriSezioni, 6))
+    } catch {
+      // ignore local parse error
+    }
   }
 
   function loadElectionSettings() {
@@ -140,20 +212,83 @@ export default function ConfigurazionePage() {
     if (!saved) return
 
     try {
-      const parsed = JSON.parse(saved)
-      setTotaleSezioni(parsed.totaleSezioni || '6')
-      setAnnoElezione(parsed.annoElezione || '2026')
-      setPlesso1Nome(parsed.plesso1Nome || 'Scuola Elementare')
-      setPlesso1Sezioni(parsed.plesso1Sezioni || '1,2,3,4')
-      setPlesso2Nome(parsed.plesso2Nome || 'Asilo Via Napoli')
-      setPlesso2Sezioni(parsed.plesso2Sezioni || '5,6')
+      const parsed = JSON.parse(saved) as {
+        totaleSezioni?: string
+        annoElezione?: string
+        plesso1Nome?: string
+        plesso1Sezioni?: string
+        plesso2Nome?: string
+        plesso2Sezioni?: string
+        elettoriSezioni?: number[]
+      }
+
+      setTotaleSezioni(safeString(parsed.totaleSezioni, '6'))
+      setAnnoElezione(safeString(parsed.annoElezione, '2026'))
+      setPlesso1Nome(safeString(parsed.plesso1Nome, 'Scuola Elementare'))
+      setPlesso1Sezioni(safeString(parsed.plesso1Sezioni, '1,2,3,4'))
+      setPlesso2Nome(safeString(parsed.plesso2Nome, 'Asilo Via Napoli'))
+      setPlesso2Sezioni(safeString(parsed.plesso2Sezioni, '5,6'))
 
       if (Array.isArray(parsed.elettoriSezioni)) {
-        setElettoriSezioni(
-          [...parsed.elettoriSezioni.map((v: number | string) => String(v ?? '')), ...Array(6).fill('')].slice(0, 6)
-        )
+        setElettoriSezioni(safeNumberArrayToString(parsed.elettoriSezioni, 6))
       }
-    } catch {}
+    } catch {
+      // ignore local parse error
+    }
+  }
+
+  async function loadServerConfig() {
+    try {
+      const res = await fetch(`${API_BASE}/api/config`, {
+        method: 'GET',
+        cache: 'no-store',
+      })
+
+      const data = (await res.json().catch(() => ({}))) as ServerConfigResponse
+
+      if (!res.ok || !data?.ok || !data?.config) {
+        return
+      }
+
+      const config = data.config
+
+      setSindaco1((prev) => safeString(config.sindaco1, prev))
+      setSindaco2((prev) => safeString(config.sindaco2, prev))
+      setLista1((prev) => safeString(config.lista1, prev))
+      setLista2((prev) => safeString(config.lista2, prev))
+
+      setConsiglieri1((prev) => {
+        const normalized = safeStringArray(config.consiglieri_lista1, 12)
+        return normalized.some(Boolean) ? normalized : prev
+      })
+
+      setConsiglieri2((prev) => {
+        const normalized = safeStringArray(config.consiglieri_lista2, 12)
+        return normalized.some(Boolean) ? normalized : prev
+      })
+
+      if (Array.isArray(config.elettori_sezioni)) {
+        setElettoriSezioni(safeNumberArrayToString(config.elettori_sezioni, 6))
+      }
+
+      setAnnoElezione((prev) => {
+        const value = config.anno
+        return value == null || value === '' ? prev : String(value)
+      })
+
+      setTotaleSezioni((prev) => {
+        const value = config.totale_sezioni
+        return value == null || value === '' ? prev : String(value)
+      })
+
+      setPlesso1Nome((prev) => safeString(config.plesso1_nome, prev))
+      setPlesso2Nome((prev) => safeString(config.plesso2_nome, prev))
+
+      setPlesso1Sezioni((prev) => normalizeSezioniText(config.plesso1_sezioni, prev))
+      setPlesso2Sezioni((prev) => normalizeSezioniText(config.plesso2_sezioni, prev))
+    } catch {
+      // keep local defaults if server config load fails
+    }
   }
 
   async function loadUsers() {
@@ -218,19 +353,64 @@ export default function ConfigurazionePage() {
     }, 1800)
   }
 
+  function parseSezioniInput(value: string) {
+    return uniqNumbers(
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  }
+
+  function syncConfigWithLocalStorage(partial: Partial<ConfigData>) {
+    try {
+      const raw = localStorage.getItem('config')
+      const existing: ConfigData = raw
+        ? JSON.parse(raw)
+        : {
+            sindaco1: '',
+            sindaco2: '',
+            lista1: '',
+            lista2: '',
+            consiglieri1: [...EMPTY_12],
+            consiglieri2: [...EMPTY_12],
+            elettoriSezioni: [...EMPTY_6_NUM],
+          }
+
+      const updated: ConfigData = {
+        ...existing,
+        ...partial,
+      }
+
+      localStorage.setItem('config', JSON.stringify(updated))
+    } catch {
+      // ignore
+    }
+  }
+
   async function saveConfigToServer() {
+    const payload = {
+      anno: Number(annoElezione || 2026),
+      totale_sezioni: Number(totaleSezioni || 6),
+      sindaco1,
+      sindaco2,
+      lista1,
+      lista2,
+      consiglieri1,
+      consiglieri2,
+      elettori_sezioni: elettoriSezioni.map((v) => Number(v || 0)),
+      plesso1_nome: plesso1Nome,
+      plesso1_sezioni: parseSezioniInput(plesso1Sezioni),
+      plesso2_nome: plesso2Nome,
+      plesso2_sezioni: parseSezioniInput(plesso2Sezioni),
+    }
+
     const res = await fetch(`${API_BASE}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sindaco1,
-        sindaco2,
-        lista1,
-        lista2,
-        consiglieri1,
-        consiglieri2,
-        elettori_sezioni: elettoriSezioni.map((v) => Number(v || 0)),
-      }),
+      body: JSON.stringify(payload),
     })
 
     const data = await res.json().catch(() => ({}))
@@ -244,30 +424,6 @@ export default function ConfigurazionePage() {
     }
 
     return data
-  }
-
-  function syncConfigWithLocalStorage(partial: Partial<ConfigData>) {
-    try {
-      const raw = localStorage.getItem('config')
-      const existing: ConfigData = raw
-        ? JSON.parse(raw)
-        : {
-            sindaco1: '',
-            sindaco2: '',
-            lista1: '',
-            lista2: '',
-            consiglieri1: Array(12).fill(''),
-            consiglieri2: Array(12).fill(''),
-            elettoriSezioni: Array(6).fill(0),
-          }
-
-      const updated: ConfigData = {
-        ...existing,
-        ...partial,
-      }
-
-      localStorage.setItem('config', JSON.stringify(updated))
-    } catch {}
   }
 
   async function handleSaveNames() {
@@ -300,8 +456,8 @@ export default function ConfigurazionePage() {
             sindaco2: '',
             lista1: '',
             lista2: '',
-            consiglieri1: Array(12).fill(''),
-            consiglieri2: Array(12).fill(''),
+            consiglieri1: [...EMPTY_12],
+            consiglieri2: [...EMPTY_12],
             elettoriSezioni: elettoriSezioni.map((v) => Number(v || 0)),
           }
 
@@ -311,8 +467,8 @@ export default function ConfigurazionePage() {
         sindaco2: '',
         lista1: '',
         lista2: '',
-        consiglieri1: Array(12).fill(''),
-        consiglieri2: Array(12).fill(''),
+        consiglieri1: [...EMPTY_12],
+        consiglieri2: [...EMPTY_12],
       }
 
       localStorage.setItem('config', JSON.stringify(updated))
@@ -324,8 +480,8 @@ export default function ConfigurazionePage() {
     setSindaco2('')
     setLista1('')
     setLista2('')
-    setConsiglieri1(Array(12).fill(''))
-    setConsiglieri2(Array(12).fill(''))
+    setConsiglieri1([...EMPTY_12])
+    setConsiglieri2([...EMPTY_12])
 
     setShowDeleteConfig(false)
   }
@@ -356,21 +512,6 @@ export default function ConfigurazionePage() {
     } catch (err) {
       alert(`Salvataggio impostazioni elezione fallito: ${err instanceof Error ? err.message : String(err)}`)
     }
-  }
-
-  function parseSezioniInput(value: string) {
-    return uniqNumbers(
-      value
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map((item) => Number(item))
-        .filter((item) => Number.isInteger(item) && item > 0)
-    )
-  }
-
-  function uniqNumbers(values: number[]) {
-    return Array.from(new Set(values)).sort((a, b) => a - b)
   }
 
   async function handleAddUser() {
@@ -434,7 +575,7 @@ export default function ConfigurazionePage() {
         method: 'POST',
       })
 
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
       if (!res.ok || !data?.ok) {
         throw new Error(data?.error || 'Errore reset database')
@@ -461,10 +602,21 @@ export default function ConfigurazionePage() {
     return elettoriSezioni.reduce((sum, value) => sum + Number(value || 0), 0)
   }, [elettoriSezioni])
 
-  if (!authChecked) {
+  if (!authChecked || pageLoading) {
     return (
       <div className="rounded-2xl bg-white p-6 shadow-sm">
-        <div className="text-sm font-bold text-slate-600">Controllo accessi amministratore...</div>
+        <div className="text-sm font-bold text-slate-600">
+          Caricamento configurazione amministratore...
+        </div>
+      </div>
+    )
+  }
+
+  if (pageError) {
+    return (
+      <div className="rounded-2xl border border-red-200 bg-white p-6 shadow-sm">
+        <div className="text-lg font-bold text-red-700">Errore pagina configurazione</div>
+        <div className="mt-2 text-sm text-slate-600">{pageError}</div>
       </div>
     )
   }
@@ -617,9 +769,7 @@ export default function ConfigurazionePage() {
                   Per gli operatori puoi assegnare una o più sezioni separate da virgola.
                   Esempio: <span className="font-bold">1,2,3,4</span>
                 </div>
-                <div className="mt-1">
-                  Gli admin ignorano il campo sezioni e vedono tutto.
-                </div>
+                <div className="mt-1">Gli admin ignorano il campo sezioni e vedono tutto.</div>
               </div>
             </Box>
 
@@ -745,26 +895,24 @@ export default function ConfigurazionePage() {
         )}
 
         {section === 'critica' && (
-          <>
-            <Box title="Area critica" color="red">
-              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-                <div className="text-lg font-bold text-red-800">Zona pericolosa</div>
-                <p className="mt-2 text-sm text-red-700">
-                  Qui puoi cancellare tutti i dati test locali e il database live 2026.
-                  Usa questo comando solo quando sei sicuro.
-                </p>
+          <Box title="Area critica" color="red">
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+              <div className="text-lg font-bold text-red-800">Zona pericolosa</div>
+              <p className="mt-2 text-sm text-red-700">
+                Qui puoi cancellare tutti i dati test locali e il database live 2026.
+                Usa questo comando solo quando sei sicuro.
+              </p>
 
-                <div className="mt-4">
-                  <button
-                    onClick={() => setShowDangerConfirm(true)}
-                    className="rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-red-700"
-                  >
-                    Reset completo dati test
-                  </button>
-                </div>
+              <div className="mt-4">
+                <button
+                  onClick={() => setShowDangerConfirm(true)}
+                  className="rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-red-700"
+                >
+                  Reset completo dati test
+                </button>
               </div>
-            </Box>
-          </>
+            </div>
+          </Box>
         )}
       </main>
 
