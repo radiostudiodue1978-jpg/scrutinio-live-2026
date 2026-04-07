@@ -32,6 +32,13 @@ type SessionUser = {
   sezioni: number[]
 }
 
+type StoredSession =
+  | SessionUser
+  | {
+      token?: string
+      user?: SessionUser
+    }
+
 type SectionState = 'empty' | 'partial' | 'complete'
 
 type Plesso = {
@@ -50,6 +57,68 @@ type ElectionSettings = {
   plesso2Sezioni?: string
 }
 
+function normalizeSession(raw: string | null): SessionUser | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'user' in parsed &&
+      parsed.user &&
+      typeof parsed.user === 'object'
+    ) {
+      const user = parsed.user
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'id' in parsed &&
+      'username' in parsed &&
+      'role' in parsed
+    ) {
+      const user = parsed as SessionUser
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 export default function SeggiPage() {
   const router = useRouter()
 
@@ -61,34 +130,26 @@ export default function SeggiPage() {
   const [settings, setSettings] = useState<ElectionSettings | null>(null)
 
   useEffect(() => {
-    const raw = localStorage.getItem('session')
+    const parsed = normalizeSession(localStorage.getItem('session'))
 
-    if (!raw) {
+    if (!parsed) {
+      localStorage.removeItem('session')
       router.replace('/login')
       return
     }
 
-    try {
-      const parsed = JSON.parse(raw) as SessionUser
-      setSession({
-        ...parsed,
-        sezioni: Array.isArray(parsed.sezioni) ? parsed.sezioni : [],
-      })
-      setAuthChecked(true)
+    setSession(parsed)
+    setAuthChecked(true)
 
-      const savedSettings = localStorage.getItem('election-settings')
-      if (savedSettings) {
-        try {
-          setSettings(JSON.parse(savedSettings) as ElectionSettings)
-        } catch {
-          setSettings(null)
-        }
-      } else {
+    const savedSettings = localStorage.getItem('election-settings')
+    if (savedSettings) {
+      try {
+        setSettings(JSON.parse(savedSettings) as ElectionSettings)
+      } catch {
         setSettings(null)
       }
-    } catch {
-      localStorage.removeItem('session')
-      router.replace('/login')
+    } else {
+      setSettings(null)
     }
   }, [router])
 
@@ -282,7 +343,7 @@ export default function SeggiPage() {
         </div>
       )}
 
-      {visiblePlessi.length === 0 && (
+      {session.role === 'operatore' && visiblePlessi.length === 0 && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800">
           <div className="font-bold">Nessuna sezione assegnata</div>
           <div className="mt-1">

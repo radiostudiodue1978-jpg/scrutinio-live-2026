@@ -13,6 +13,11 @@ type SessionUser = {
   sezioni: number[]
 }
 
+type SessionData = {
+  token: string
+  user: SessionUser
+}
+
 type ConfigData = {
   sindaco1: string
   sindaco2: string
@@ -86,6 +91,7 @@ export default function SezionePage() {
   const sectionNumber = Number(id)
 
   const [session, setSession] = useState<SessionUser | null>(null)
+  const [token, setToken] = useState<string>('')
   const [authChecked, setAuthChecked] = useState(false)
 
   const [config, setConfig] = useState<ConfigData | null>(null)
@@ -128,17 +134,26 @@ export default function SezionePage() {
     }
 
     try {
-      const parsed = JSON.parse(rawSession) as SessionUser
+      const parsed = JSON.parse(rawSession) as SessionData
+
+      if (!parsed?.token || !parsed?.user) {
+        localStorage.removeItem('session')
+        router.replace('/login')
+        return
+      }
+
+      const user = parsed.user
 
       if (
-        parsed.role === 'operatore' &&
-        (!Number.isFinite(sectionNumber) || !parsed.sezioni.includes(sectionNumber))
+        user.role === 'operatore' &&
+        (!Number.isFinite(sectionNumber) || !user.sezioni.includes(sectionNumber))
       ) {
         router.replace('/seggi')
         return
       }
 
-      setSession(parsed)
+      setSession(user)
+      setToken(parsed.token)
       setAuthChecked(true)
     } catch {
       localStorage.removeItem('session')
@@ -398,9 +413,16 @@ export default function SezionePage() {
   }
 
   async function postToApi(path: string, payload: Record<string, unknown>) {
+    if (!token) {
+      throw new Error('Token mancante. Effettua di nuovo il login.')
+    }
+
     const res = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(payload),
     })
 

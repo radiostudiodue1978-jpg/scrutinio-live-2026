@@ -1,10 +1,25 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 const API_BASE = 'https://diretta-radio-api.francesco-statello88.workers.dev'
 const TOTAL_SECTIONS = 6
 const RADIO_REFRESH_MS = 14 * 60 * 1000
+
+type SessionUser = {
+  id: string
+  username: string
+  role: 'admin' | 'operatore'
+  sezioni: number[]
+}
+
+type StoredSession =
+  | SessionUser
+  | {
+      token?: string
+      user?: SessionUser
+    }
 
 type LiveRow = {
   id: string
@@ -65,7 +80,72 @@ type MainTab = `sezione-${number}` | 'riepilogo-consiglieri'
 type SectionInnerTab = 'risultati' | 'consiglieri'
 type SummaryConsiglieriTab = 'lista1' | 'lista2'
 
+function normalizeSession(raw: string | null): SessionUser | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'user' in parsed &&
+      parsed.user &&
+      typeof parsed.user === 'object'
+    ) {
+      const user = parsed.user
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'id' in parsed &&
+      'username' in parsed &&
+      'role' in parsed
+    ) {
+      const user = parsed as SessionUser
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 export default function RadioPage() {
+  const router = useRouter()
+
+  const [authChecked, setAuthChecked] = useState(false)
   const [rows, setRows] = useState<LiveRow[]>([])
   const [config, setConfig] = useState<ConfigData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -84,6 +164,20 @@ export default function RadioPage() {
   })
 
   useEffect(() => {
+    const session = normalizeSession(localStorage.getItem('session'))
+
+    if (!session) {
+      localStorage.removeItem('session')
+      router.replace('/login')
+      return
+    }
+
+    if (session.role !== 'admin') {
+      router.replace('/seggi')
+      return
+    }
+
+    setAuthChecked(true)
     loadConfig()
     loadLive()
 
@@ -102,7 +196,7 @@ export default function RadioPage() {
       window.removeEventListener('focus', onFocus)
       clearInterval(interval)
     }
-  }, [])
+  }, [router])
 
   function loadConfig() {
     try {
@@ -168,7 +262,7 @@ export default function RadioPage() {
       const existing = rows.find((row) => row.sezione === sectionNumber) || null
 
       const elettoriConfig = Array.isArray(config?.elettoriSezioni)
-        ? Number(config?.elettoriSezioni?.[index] || 0)
+        ? Number(config.elettoriSezioni?.[index] || 0)
         : 0
 
       const elettori = Number(existing?.elettori || elettoriConfig || 0)
@@ -342,7 +436,7 @@ export default function RadioPage() {
       ? enrichedRows[activeSectionNumber - 1]
       : null
 
-  if (loading) {
+  if (!authChecked || loading) {
     return (
       <div className="rounded-2xl bg-white p-6 shadow-sm">
         <div className="text-sm font-bold text-slate-600">Caricamento dashboard radio...</div>
@@ -671,14 +765,14 @@ function SectionDetailCard({
         ) : (
           <div className="mt-4 grid gap-4 xl:grid-cols-2">
             <PreferenceTableCompact
-              title={`Consiglieri ${config?.lista2 || 'Lista Y'}`}
-              labels={config?.consiglieri2 || Array(12).fill('')}
-              values={row.consiglieri2}
-            />
-            <PreferenceTableCompact
               title={`Consiglieri ${config?.lista1 || 'Lista X'}`}
               labels={config?.consiglieri1 || Array(12).fill('')}
               values={row.consiglieri1}
+            />
+            <PreferenceTableCompact
+              title={`Consiglieri ${config?.lista2 || 'Lista Y'}`}
+              labels={config?.consiglieri2 || Array(12).fill('')}
+              values={row.consiglieri2}
             />
           </div>
         )}

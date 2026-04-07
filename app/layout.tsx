@@ -35,6 +35,75 @@ type SessionUser = {
   sezioni: number[]
 }
 
+type StoredSession =
+  | SessionUser
+  | {
+      token?: string
+      user?: SessionUser
+    }
+
+function normalizeSession(raw: string | null): SessionUser | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'user' in parsed &&
+      parsed.user &&
+      typeof parsed.user === 'object'
+    ) {
+      const user = parsed.user
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'id' in parsed &&
+      'username' in parsed &&
+      'role' in parsed
+    ) {
+      const user = parsed as SessionUser
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 export default function RootLayout({
   children,
 }: {
@@ -54,9 +123,10 @@ export default function RootLayout({
   const showBackButton = isSezioneDetailPage
 
   useEffect(() => {
-    const raw = localStorage.getItem('session')
+    const normalized = normalizeSession(localStorage.getItem('session'))
 
-    if (!raw) {
+    if (!normalized) {
+      localStorage.removeItem('session')
       setSession(null)
       setAuthChecked(true)
 
@@ -66,25 +136,14 @@ export default function RootLayout({
       return
     }
 
-    try {
-      const parsed = JSON.parse(raw) as SessionUser
-      setSession(parsed)
-      setAuthChecked(true)
+    setSession(normalized)
+    setAuthChecked(true)
 
-      if (isLoginPage) {
-        if (parsed.role === 'admin') {
-          router.replace('/dashboard')
-        } else {
-          router.replace('/seggi')
-        }
-      }
-    } catch {
-      localStorage.removeItem('session')
-      setSession(null)
-      setAuthChecked(true)
-
-      if (!isLoginPage) {
-        router.replace('/login')
+    if (isLoginPage) {
+      if (normalized.role === 'admin') {
+        router.replace('/dashboard')
+      } else {
+        router.replace('/seggi')
       }
     }
   }, [isLoginPage, router])

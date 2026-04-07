@@ -12,6 +12,11 @@ type User = {
   sezioni: number[]
 }
 
+type SessionData = {
+  token: string
+  user: User
+}
+
 export default function LoginPage() {
   const router = useRouter()
 
@@ -44,7 +49,7 @@ export default function LoginPage() {
 
       const data = await res.json().catch(() => null)
 
-      if (!res.ok || !data?.ok || !data?.user) {
+      if (!res.ok || !data?.ok || !data?.user || !data?.token) {
         setError(data?.error || 'Credenziali non valide')
         return
       }
@@ -56,7 +61,12 @@ export default function LoginPage() {
         sezioni: Array.isArray(data.user.sezioni) ? data.user.sezioni : [],
       }
 
-      localStorage.setItem('session', JSON.stringify(sessionUser))
+      const sessionData: SessionData = {
+        token: String(data.token),
+        user: sessionUser,
+      }
+
+      localStorage.setItem('session', JSON.stringify(sessionData))
 
       if (sessionUser.role === 'admin') {
         router.replace('/dashboard')

@@ -13,6 +13,13 @@ type SessionUser = {
   sezioni: number[]
 }
 
+type StoredSession =
+  | SessionUser
+  | {
+      token?: string
+      user?: SessionUser
+    }
+
 type ConfigSection = 'nomi' | 'login' | 'elezione' | 'critica'
 
 type UserItem = {
@@ -63,6 +70,68 @@ type ServerConfigResponse = {
 const EMPTY_12 = Array(12).fill('')
 const EMPTY_6_STR = Array(6).fill('')
 const EMPTY_6_NUM = Array(6).fill(0)
+
+function normalizeSession(raw: string | null): SessionUser | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'user' in parsed &&
+      parsed.user &&
+      typeof parsed.user === 'object'
+    ) {
+      const user = parsed.user
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'id' in parsed &&
+      'username' in parsed &&
+      'role' in parsed
+    ) {
+      const user = parsed as SessionUser
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
 
 function safeString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback
@@ -143,45 +212,43 @@ export default function ConfigurazionePage() {
     let mounted = true
 
     async function bootstrap() {
-      const rawSession = localStorage.getItem('session')
+      const session = normalizeSession(localStorage.getItem('session'))
 
-      if (!rawSession) {
-        router.replace('/login')
-        return
-      }
-
-      try {
-        const parsed = JSON.parse(rawSession) as SessionUser
-
-        if (parsed.role !== 'admin') {
-          router.replace('/seggi')
-          return
-        }
-
-        if (!mounted) return
-
-        setAuthChecked(true)
-        setPageError('')
-
-        loadLocalConfig()
-        loadElectionSettings()
-
-        await Promise.allSettled([
-          loadServerConfig(),
-          loadUsers(),
-        ])
-      } catch {
+      if (!session) {
         localStorage.removeItem('session')
         router.replace('/login')
         return
-      } finally {
-        if (mounted) {
-          setPageLoading(false)
-        }
+      }
+
+      if (session.role !== 'admin') {
+        router.replace('/seggi')
+        return
+      }
+
+      if (!mounted) return
+
+      setAuthChecked(true)
+      setPageError('')
+
+      loadLocalConfig()
+      loadElectionSettings()
+
+      await Promise.allSettled([
+        loadServerConfig(),
+        loadUsers(),
+      ])
+
+      if (mounted) {
+        setPageLoading(false)
       }
     }
 
-    bootstrap()
+    bootstrap().catch((err) => {
+      if (mounted) {
+        setPageError(err instanceof Error ? err.message : 'Errore caricamento configurazione')
+        setPageLoading(false)
+      }
+    })
 
     return () => {
       mounted = false
@@ -203,7 +270,7 @@ export default function ConfigurazionePage() {
       setConsiglieri2(safeStringArray(parsed.consiglieri2, 12))
       setElettoriSezioni(safeNumberArrayToString(parsed.elettoriSezioni, 6))
     } catch {
-      // ignore local parse error
+      // ignore
     }
   }
 
@@ -233,7 +300,7 @@ export default function ConfigurazionePage() {
         setElettoriSezioni(safeNumberArrayToString(parsed.elettoriSezioni, 6))
       }
     } catch {
-      // ignore local parse error
+      // ignore
     }
   }
 
@@ -287,7 +354,7 @@ export default function ConfigurazionePage() {
       setPlesso1Sezioni((prev) => normalizeSezioniText(config.plesso1_sezioni, prev))
       setPlesso2Sezioni((prev) => normalizeSezioniText(config.plesso2_sezioni, prev))
     } catch {
-      // keep local defaults if server config load fails
+      // keep local defaults
     }
   }
 

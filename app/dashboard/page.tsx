@@ -14,6 +14,13 @@ type SessionUser = {
   sezioni: number[]
 }
 
+type StoredSession =
+  | SessionUser
+  | {
+      token?: string
+      user?: SessionUser
+    }
+
 type ConfigData = {
   sindaco1: string
   sindaco2: string
@@ -47,6 +54,68 @@ type LiveRow = {
 
 type SectionStatus = 'vuota' | 'parziale' | 'completa'
 
+function normalizeSession(raw: string | null): SessionUser | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'user' in parsed &&
+      parsed.user &&
+      typeof parsed.user === 'object'
+    ) {
+      const user = parsed.user
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'id' in parsed &&
+      'username' in parsed &&
+      'role' in parsed
+    ) {
+      const user = parsed as SessionUser
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 export default function DashboardPage() {
   const router = useRouter()
 
@@ -60,57 +129,50 @@ export default function DashboardPage() {
   const [offlineQueueCount, setOfflineQueueCount] = useState(0)
 
   useEffect(() => {
-    const rawSession = localStorage.getItem('session')
+    const session = normalizeSession(localStorage.getItem('session'))
 
-    if (!rawSession) {
+    if (!session) {
+      localStorage.removeItem('session')
       router.replace('/login')
       return
     }
 
-    try {
-      const parsed = JSON.parse(rawSession) as SessionUser
+    if (session.role !== 'admin') {
+      router.replace('/seggi')
+      return
+    }
 
-      if (parsed.role !== 'admin') {
-        router.replace('/seggi')
-        return
-      }
+    setAuthChecked(true)
+    loadConfig()
+    setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true)
+    setOfflineQueueCount(getOfflineQueueCount())
+    loadLive()
 
-      setAuthChecked(true)
+    const onFocus = () => {
       loadConfig()
-      setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true)
-      setOfflineQueueCount(getOfflineQueueCount())
-
       loadLive()
+      setOfflineQueueCount(getOfflineQueueCount())
+      setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true)
+    }
 
-      const onFocus = () => {
-        loadConfig()
-        loadLive()
-        setOfflineQueueCount(getOfflineQueueCount())
-        setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true)
-      }
+    const onOnline = () => setIsOnline(true)
+    const onOffline = () => setIsOnline(false)
 
-      const onOnline = () => setIsOnline(true)
-      const onOffline = () => setIsOnline(false)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
 
-      window.addEventListener('focus', onFocus)
-      window.addEventListener('online', onOnline)
-      window.addEventListener('offline', onOffline)
+    const interval = setInterval(() => {
+      loadLive()
+      setOfflineQueueCount(getOfflineQueueCount())
+      setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true)
+    }, 10000)
 
-      const interval = setInterval(() => {
-        loadLive()
-        setOfflineQueueCount(getOfflineQueueCount())
-        setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true)
-      }, 10000)
-
-      return () => {
-        window.removeEventListener('focus', onFocus)
-        window.removeEventListener('online', onOnline)
-        window.removeEventListener('offline', onOffline)
-        clearInterval(interval)
-      }
-    } catch {
-      localStorage.removeItem('session')
-      router.replace('/login')
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+      clearInterval(interval)
     }
   }, [router])
 
@@ -173,7 +235,7 @@ export default function DashboardPage() {
       const row = rows.find((item) => item.sezione === sezione) || null
 
       const elettoriConfig = Array.isArray(config?.elettoriSezioni)
-        ? Number(config?.elettoriSezioni[index] || 0)
+        ? Number(config.elettoriSezioni[index] || 0)
         : 0
 
       const elettori = Number(row?.elettori || elettoriConfig || 0)
