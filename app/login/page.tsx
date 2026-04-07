@@ -12,11 +12,6 @@ type User = {
   sezioni: number[]
 }
 
-type SessionData = {
-  token: string
-  user: User
-}
-
 export default function LoginPage() {
   const router = useRouter()
 
@@ -61,12 +56,8 @@ export default function LoginPage() {
         sezioni: Array.isArray(data.user.sezioni) ? data.user.sezioni : [],
       }
 
-      const sessionData: SessionData = {
-        token: String(data.token),
-        user: sessionUser,
-      }
-
-      localStorage.setItem('session', JSON.stringify(sessionData))
+      localStorage.setItem('session', JSON.stringify(sessionUser))
+      localStorage.setItem('auth_token', data.token)
 
       if (sessionUser.role === 'admin') {
         router.replace('/dashboard')

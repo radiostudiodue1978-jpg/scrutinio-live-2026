@@ -633,37 +633,46 @@ export default function ConfigurazionePage() {
   }
 
   async function handleDangerReset() {
-    if (dangerText !== 'CANCELLA TUTTO') return
+  if (dangerText !== 'CANCELLA TUTTO') return
 
-    try {
-      setDangerLoading(true)
+  try {
+    setDangerLoading(true)
 
-      const res = await fetch(`${API_BASE}/api/reset`, {
-        method: 'POST',
-      })
+    const token = localStorage.getItem('auth_token') || ''
+    const resetKey =
+      process.env.NEXT_PUBLIC_ADMIN_RESET_KEY || ''
 
-      const data = await res.json().catch(() => ({}))
+    const res = await fetch(`${API_BASE}/api/reset`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-admin-reset-key': resetKey,
+      },
+    })
 
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || 'Errore reset database')
-      }
+    const data = await res.json().catch(() => ({}))
 
-      localStorage.removeItem('successful-submissions')
-
-      const total = Number(totaleSezioni || 6)
-      for (let i = 1; i <= total; i += 1) {
-        localStorage.removeItem(`draft-sezione-${i}`)
-      }
-
-      setDangerText('')
-      setShowDangerConfirm(false)
-      pulseSaved()
-    } catch (err) {
-      alert(`Reset fallito: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setDangerLoading(false)
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.error || 'Errore reset database')
     }
+
+    localStorage.removeItem('successful-submissions')
+
+    const total = Number(totaleSezioni || 6)
+    for (let i = 1; i <= total; i += 1) {
+      localStorage.removeItem(`draft-sezione-${i}`)
+    }
+
+    setDangerText('')
+    setShowDangerConfirm(false)
+    pulseSaved()
+  } catch (err) {
+    alert(`Reset fallito: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    setDangerLoading(false)
   }
+}
 
   const totaleElettoriConfigurati = useMemo(() => {
     return elettoriSezioni.reduce((sum, value) => sum + Number(value || 0), 0)
