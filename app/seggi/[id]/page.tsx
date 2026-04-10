@@ -13,10 +13,12 @@ type SessionUser = {
   sezioni: number[]
 }
 
-type SessionData = {
-  token: string
-  user: SessionUser
-}
+type StoredSession =
+  | SessionUser
+  | {
+      token?: string
+      user?: SessionUser
+    }
 
 type ConfigData = {
   sindaco1: string
@@ -83,6 +85,68 @@ type OfflineQueueItem = {
 type TabKey = 'affluenza' | 'sindaco' | 'liste' | 'lista1' | 'lista2'
 type StatusType = 'idle' | 'success' | 'error' | 'warning'
 
+function normalizeSession(raw: string | null): SessionUser | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredSession
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'user' in parsed &&
+      parsed.user &&
+      typeof parsed.user === 'object'
+    ) {
+      const user = parsed.user
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'id' in parsed &&
+      'username' in parsed &&
+      'role' in parsed
+    ) {
+      const user = parsed as SessionUser
+
+      if (
+        typeof user.id === 'string' &&
+        typeof user.username === 'string' &&
+        (user.role === 'admin' || user.role === 'operatore')
+      ) {
+        return {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          sezioni: Array.isArray(user.sezioni)
+            ? user.sezioni.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+            : [],
+        }
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 export default function SezionePage() {
   const params = useParams()
   const router = useRouter()
@@ -126,39 +190,32 @@ export default function SezionePage() {
   const draftKey = `draft-sezione-${id}`
 
   useEffect(() => {
-    const rawSession = localStorage.getItem('session')
+    const parsedUser = normalizeSession(localStorage.getItem('session'))
+    const savedToken = localStorage.getItem('auth_token') || ''
 
-    if (!rawSession) {
+    if (!parsedUser) {
+      localStorage.removeItem('session')
+      localStorage.removeItem('auth_token')
       router.replace('/login')
       return
     }
 
-    try {
-      const parsed = JSON.parse(rawSession) as SessionData
-
-      if (!parsed?.token || !parsed?.user) {
-        localStorage.removeItem('session')
-        router.replace('/login')
-        return
-      }
-
-      const user = parsed.user
-
-      if (
-        user.role === 'operatore' &&
-        (!Number.isFinite(sectionNumber) || !user.sezioni.includes(sectionNumber))
-      ) {
-        router.replace('/seggi')
-        return
-      }
-
-      setSession(user)
-      setToken(parsed.token)
-      setAuthChecked(true)
-    } catch {
-      localStorage.removeItem('session')
+    if (!savedToken) {
       router.replace('/login')
+      return
     }
+
+    if (
+      parsedUser.role === 'operatore' &&
+      (!Number.isFinite(sectionNumber) || !parsedUser.sezioni.includes(sectionNumber))
+    ) {
+      router.replace('/seggi')
+      return
+    }
+
+    setSession(parsedUser)
+    setToken(savedToken)
+    setAuthChecked(true)
   }, [router, sectionNumber])
 
   useEffect(() => {
@@ -349,25 +406,20 @@ export default function SezionePage() {
         setSchedeBianche('')
         setSchedeNulle('')
         break
-
       case 'sindaco':
         setSindaco1('')
         setSindaco2('')
         break
-
       case 'liste':
         setLista1('')
         setLista2('')
         break
-
       case 'lista1':
         setConsiglieriLista1(Array(12).fill(''))
         break
-
       case 'lista2':
         setConsiglieriLista2(Array(12).fill(''))
         break
-
       case 'all':
         setVotanti('')
         setSchedeBianche('')
@@ -379,7 +431,6 @@ export default function SezionePage() {
         setConsiglieriLista1(Array(12).fill(''))
         setConsiglieriLista2(Array(12).fill(''))
         break
-
       case 'completa':
       case 'riapri':
       default:

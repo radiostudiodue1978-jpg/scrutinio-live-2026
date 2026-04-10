@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
 
 const API_BASE = 'https://diretta-radio-api.francesco-statello88.workers.dev'
 
@@ -65,6 +64,12 @@ type ServerConfigResponse = {
     plesso2_nome?: string | null
     plesso2_sezioni?: number[] | string | null
   } | null
+}
+
+type WorkerErrorResponse = {
+  ok?: boolean
+  error?: string
+  details?: string
 }
 
 const EMPTY_12 = Array(12).fill('')
@@ -173,6 +178,7 @@ export default function ConfigurazionePage() {
   const [authChecked, setAuthChecked] = useState(false)
   const [pageLoading, setPageLoading] = useState(true)
   const [pageError, setPageError] = useState('')
+  const [token, setToken] = useState('')
 
   const [section, setSection] = useState<ConfigSection>('nomi')
 
@@ -213,9 +219,18 @@ export default function ConfigurazionePage() {
 
     async function bootstrap() {
       const session = normalizeSession(localStorage.getItem('session'))
+      const authToken = localStorage.getItem('auth_token') || ''
 
       if (!session) {
         localStorage.removeItem('session')
+        localStorage.removeItem('auth_token')
+        router.replace('/login')
+        return
+      }
+
+      if (!authToken) {
+        localStorage.removeItem('session')
+        localStorage.removeItem('auth_token')
         router.replace('/login')
         return
       }
@@ -227,16 +242,14 @@ export default function ConfigurazionePage() {
 
       if (!mounted) return
 
+      setToken(authToken)
       setAuthChecked(true)
       setPageError('')
 
       loadLocalConfig()
       loadElectionSettings()
 
-      await Promise.allSettled([
-        loadServerConfig(),
-        loadUsers(),
-      ])
+      await Promise.allSettled([loadServerConfig(), loadUsers(authToken)])
 
       if (mounted) {
         setPageLoading(false)
@@ -358,21 +371,40 @@ export default function ConfigurazionePage() {
     }
   }
 
-  async function loadUsers() {
+  async function loadUsers(authTokenOverride?: string) {
     try {
       setUsersLoading(true)
       setUsersError('')
 
-      const { data, error } = await supabase
-        .from('utenti_accesso')
-        .select('id, username, password, role, sezioni')
-        .order('username', { ascending: true })
+      const currentToken = authTokenOverride || token || localStorage.getItem('auth_token') || ''
 
-      if (error) {
-        throw new Error(error.message)
+      if (!currentToken) {
+        throw new Error('Token mancante. Effettua di nuovo il login.')
       }
 
-      const normalized: UserItem[] = ((data || []) as DbUserRow[]).map((user) => ({
+      const res = await fetch(`${API_BASE}/api/utenti`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentToken}`,
+        },
+        cache: 'no-store',
+      })
+
+      const data = await res.json().catch(() => [])
+
+      if (!res.ok) {
+        const err = data as WorkerErrorResponse
+        throw new Error(
+          typeof err?.details === 'string'
+            ? err.details
+            : typeof err?.error === 'string'
+              ? err.error
+              : 'Errore caricamento utenti'
+        )
+      }
+
+      const normalized: UserItem[] = (Array.isArray(data) ? data : []).map((user: DbUserRow) => ({
         id: user.id,
         username: user.username,
         password: user.password,
@@ -457,7 +489,11 @@ export default function ConfigurazionePage() {
     }
   }
 
-  async function saveConfigToServer() {
+  async function saveConfigToServer(payloadOverride?: Partial<Record<string, unknown>>) {
+    if (!token) {
+      throw new Error('Token mancante. Effettua di nuovo il login.')
+    }
+
     const payload = {
       anno: Number(annoElezione || 2026),
       totale_sezioni: Number(totaleSezioni || 6),
@@ -472,11 +508,15 @@ export default function ConfigurazionePage() {
       plesso1_sezioni: parseSezioniInput(plesso1Sezioni),
       plesso2_nome: plesso2Nome,
       plesso2_sezioni: parseSezioniInput(plesso2Sezioni),
+      ...payloadOverride,
     }
 
     const res = await fetch(`${API_BASE}/api/config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(payload),
     })
 
@@ -484,9 +524,11 @@ export default function ConfigurazionePage() {
 
     if (!res.ok || !data?.ok) {
       throw new Error(
-        typeof data?.error === 'string'
-          ? data.error
-          : 'Errore salvataggio configurazione server'
+        typeof data?.details === 'string'
+          ? data.details
+          : typeof data?.error === 'string'
+            ? data.error
+            : 'Errore salvataggio configurazione server'
       )
     }
 
@@ -513,44 +555,41 @@ export default function ConfigurazionePage() {
     }
   }
 
-  function handleDeleteConfig() {
-    try {
-      const raw = localStorage.getItem('config')
-      const existing: ConfigData = raw
-        ? JSON.parse(raw)
-        : {
-            sindaco1: '',
-            sindaco2: '',
-            lista1: '',
-            lista2: '',
-            consiglieri1: [...EMPTY_12],
-            consiglieri2: [...EMPTY_12],
-            elettoriSezioni: elettoriSezioni.map((v) => Number(v || 0)),
-          }
+  async function handleDeleteConfig() {
+    const emptyConfig: ConfigData = {
+      sindaco1: '',
+      sindaco2: '',
+      lista1: '',
+      lista2: '',
+      consiglieri1: [...EMPTY_12],
+      consiglieri2: [...EMPTY_12],
+      elettoriSezioni: elettoriSezioni.map((v) => Number(v || 0)),
+    }
 
-      const updated: ConfigData = {
-        ...existing,
+    try {
+      localStorage.setItem('config', JSON.stringify(emptyConfig))
+
+      await saveConfigToServer({
         sindaco1: '',
         sindaco2: '',
         lista1: '',
         lista2: '',
         consiglieri1: [...EMPTY_12],
         consiglieri2: [...EMPTY_12],
-      }
+      })
 
-      localStorage.setItem('config', JSON.stringify(updated))
-    } catch {
-      localStorage.removeItem('config')
+      setSindaco1('')
+      setSindaco2('')
+      setLista1('')
+      setLista2('')
+      setConsiglieri1([...EMPTY_12])
+      setConsiglieri2([...EMPTY_12])
+
+      setShowDeleteConfig(false)
+      pulseSaved()
+    } catch (err) {
+      alert(`Cancellazione configurazione fallita: ${err instanceof Error ? err.message : String(err)}`)
     }
-
-    setSindaco1('')
-    setSindaco2('')
-    setLista1('')
-    setLista2('')
-    setConsiglieri1([...EMPTY_12])
-    setConsiglieri2([...EMPTY_12])
-
-    setShowDeleteConfig(false)
   }
 
   async function handleSaveElectionSettings() {
@@ -587,17 +626,37 @@ export default function ConfigurazionePage() {
     try {
       setUsersError('')
 
+      const currentToken = token || localStorage.getItem('auth_token') || ''
+      if (!currentToken) {
+        throw new Error('Token mancante. Effettua di nuovo il login.')
+      }
+
       const parsedSezioni = newRole === 'admin' ? [] : parseSezioniInput(newSezioni)
 
-      const { error } = await supabase.from('utenti_accesso').insert({
-        username: newUsername.trim(),
-        password: newPassword.trim(),
-        role: newRole,
-        sezioni: parsedSezioni,
+      const res = await fetch(`${API_BASE}/api/utenti`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentToken}`,
+        },
+        body: JSON.stringify({
+          username: newUsername.trim(),
+          password: newPassword.trim(),
+          role: newRole,
+          sezioni: parsedSezioni,
+        }),
       })
 
-      if (error) {
-        throw new Error(error.message)
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.details === 'string'
+            ? data.details
+            : typeof data?.error === 'string'
+              ? data.error
+              : 'Creazione utente fallita'
+        )
       }
 
       setNewUsername('')
@@ -605,7 +664,7 @@ export default function ConfigurazionePage() {
       setNewRole('operatore')
       setNewSezioni('')
 
-      await loadUsers()
+      await loadUsers(currentToken)
       pulseSaved()
     } catch (err) {
       alert(`Creazione utente fallita: ${err instanceof Error ? err.message : String(err)}`)
@@ -616,16 +675,32 @@ export default function ConfigurazionePage() {
     try {
       setUsersError('')
 
-      const { error } = await supabase
-        .from('utenti_accesso')
-        .delete()
-        .eq('id', id)
-
-      if (error) {
-        throw new Error(error.message)
+      const currentToken = token || localStorage.getItem('auth_token') || ''
+      if (!currentToken) {
+        throw new Error('Token mancante. Effettua di nuovo il login.')
       }
 
-      await loadUsers()
+      const res = await fetch(`${API_BASE}/api/utenti/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentToken}`,
+        },
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.details === 'string'
+            ? data.details
+            : typeof data?.error === 'string'
+              ? data.error
+              : 'Eliminazione utente fallita'
+        )
+      }
+
+      await loadUsers(currentToken)
       pulseSaved()
     } catch (err) {
       alert(`Eliminazione utente fallita: ${err instanceof Error ? err.message : String(err)}`)
@@ -633,46 +708,44 @@ export default function ConfigurazionePage() {
   }
 
   async function handleDangerReset() {
-  if (dangerText !== 'CANCELLA TUTTO') return
+    if (dangerText !== 'CANCELLA TUTTO') return
 
-  try {
-    setDangerLoading(true)
+    try {
+      setDangerLoading(true)
 
-    const token = localStorage.getItem('auth_token') || ''
-    const resetKey =
-      process.env.NEXT_PUBLIC_ADMIN_RESET_KEY || ''
+      const resetKey = process.env.NEXT_PUBLIC_ADMIN_RESET_KEY || ''
 
-    const res = await fetch(`${API_BASE}/api/reset`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'x-admin-reset-key': resetKey,
-      },
-    })
+      const res = await fetch(`${API_BASE}/api/reset`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'x-admin-reset-key': resetKey,
+        },
+      })
 
-    const data = await res.json().catch(() => ({}))
+      const data = await res.json().catch(() => ({}))
 
-    if (!res.ok || !data?.ok) {
-      throw new Error(data?.error || 'Errore reset database')
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || 'Errore reset database')
+      }
+
+      localStorage.removeItem('successful-submissions')
+
+      const total = Number(totaleSezioni || 6)
+      for (let i = 1; i <= total; i += 1) {
+        localStorage.removeItem(`draft-sezione-${i}`)
+      }
+
+      setDangerText('')
+      setShowDangerConfirm(false)
+      pulseSaved()
+    } catch (err) {
+      alert(`Reset fallito: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setDangerLoading(false)
     }
-
-    localStorage.removeItem('successful-submissions')
-
-    const total = Number(totaleSezioni || 6)
-    for (let i = 1; i <= total; i += 1) {
-      localStorage.removeItem(`draft-sezione-${i}`)
-    }
-
-    setDangerText('')
-    setShowDangerConfirm(false)
-    pulseSaved()
-  } catch (err) {
-    alert(`Reset fallito: ${err instanceof Error ? err.message : String(err)}`)
-  } finally {
-    setDangerLoading(false)
   }
-}
 
   const totaleElettoriConfigurati = useMemo(() => {
     return elettoriSezioni.reduce((sum, value) => sum + Number(value || 0), 0)
