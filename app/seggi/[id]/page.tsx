@@ -393,6 +393,29 @@ export default function SezionePage() {
     } catch {}
   }
 
+  function persistCurrentDraft(next: Partial<DraftData> = {}) {
+    try {
+      const current: DraftData = {
+        votanti,
+        schedeBianche,
+        schedeNulle,
+        sindaco1,
+        sindaco2,
+        lista1,
+        lista2,
+        consiglieriLista1,
+        consiglieriLista2,
+      }
+
+      const merged: DraftData = {
+        ...current,
+        ...next,
+      }
+
+      localStorage.setItem(draftKey, JSON.stringify(merged))
+    } catch {}
+  }
+
   function clearDraftLocally() {
     try {
       localStorage.removeItem(draftKey)
@@ -405,21 +428,45 @@ export default function SezionePage() {
         setVotanti('')
         setSchedeBianche('')
         setSchedeNulle('')
+        persistCurrentDraft({
+          votanti: '',
+          schedeBianche: '',
+          schedeNulle: '',
+        })
         break
+
       case 'sindaco':
         setSindaco1('')
         setSindaco2('')
+        persistCurrentDraft({
+          sindaco1: '',
+          sindaco2: '',
+        })
         break
+
       case 'liste':
         setLista1('')
         setLista2('')
+        persistCurrentDraft({
+          lista1: '',
+          lista2: '',
+        })
         break
+
       case 'lista1':
         setConsiglieriLista1(Array(12).fill(''))
+        persistCurrentDraft({
+          consiglieriLista1: Array(12).fill(''),
+        })
         break
+
       case 'lista2':
         setConsiglieriLista2(Array(12).fill(''))
+        persistCurrentDraft({
+          consiglieriLista2: Array(12).fill(''),
+        })
         break
+
       case 'all':
         setVotanti('')
         setSchedeBianche('')
@@ -430,7 +477,19 @@ export default function SezionePage() {
         setLista2('')
         setConsiglieriLista1(Array(12).fill(''))
         setConsiglieriLista2(Array(12).fill(''))
+        persistCurrentDraft({
+          votanti: '',
+          schedeBianche: '',
+          schedeNulle: '',
+          sindaco1: '',
+          sindaco2: '',
+          lista1: '',
+          lista2: '',
+          consiglieriLista1: Array(12).fill(''),
+          consiglieriLista2: Array(12).fill(''),
+        })
         break
+
       case 'completa':
       case 'riapri':
       default:
@@ -628,8 +687,9 @@ export default function SezionePage() {
         if (item.sectionNumber === sectionNumber) {
           successfulForCurrentSection.push(item.action)
         }
-      } catch {
+      } catch (error) {
         remaining.push(item)
+        console.error('Errore replay coda offline:', error)
       }
     }
 
@@ -664,11 +724,28 @@ export default function SezionePage() {
       await postToApi(path, payload)
       await afterSuccessfulSend(successMessage, action)
     } catch (error) {
-      addToOfflineQueue(path, payload, action)
-      setFeedback(
-        'warning',
-        'Connessione assente. Dati salvati e in attesa di invio automatico.'
-      )
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : ''
+
+      const isNetworkLikeError =
+        message.includes('failed to fetch') ||
+        message.includes('network') ||
+        message.includes('timeout') ||
+        !navigator.onLine
+
+      if (isNetworkLikeError) {
+        addToOfflineQueue(path, payload, action)
+        setFeedback(
+          'warning',
+          'Connessione assente. Dati salvati e in attesa di invio automatico.'
+        )
+      } else {
+        setFeedback(
+          'error',
+          error instanceof Error ? error.message : 'Errore di invio'
+        )
+      }
+
       scrollTopSmooth()
       console.error(error)
     } finally {
@@ -1118,17 +1195,34 @@ export default function SezionePage() {
       setFeedback('success', 'Sezione segnata come completa')
       scrollTopSmooth()
     } catch (error) {
-      addToOfflineQueue(
-        '/api/completa',
-        {
-          sezione: sectionNumber,
-        },
-        'completa'
-      )
-      setFeedback(
-        'warning',
-        'Connessione assente. Chiusura sezione salvata e in attesa di invio automatico.'
-      )
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : ''
+
+      const isNetworkLikeError =
+        message.includes('failed to fetch') ||
+        message.includes('network') ||
+        message.includes('timeout') ||
+        !navigator.onLine
+
+      if (isNetworkLikeError) {
+        addToOfflineQueue(
+          '/api/completa',
+          {
+            sezione: sectionNumber,
+          },
+          'completa'
+        )
+        setFeedback(
+          'warning',
+          'Connessione assente. Chiusura sezione salvata e in attesa di invio automatico.'
+        )
+      } else {
+        setFeedback(
+          'error',
+          error instanceof Error ? error.message : 'Errore chiusura sezione'
+        )
+      }
+
       scrollTopSmooth()
       console.error(error)
     } finally {
@@ -1149,17 +1243,34 @@ export default function SezionePage() {
       setFeedback('success', 'Sezione riaperta')
       scrollTopSmooth()
     } catch (error) {
-      addToOfflineQueue(
-        '/api/riapri',
-        {
-          sezione: sectionNumber,
-        },
-        'riapri'
-      )
-      setFeedback(
-        'warning',
-        'Connessione assente. Riapertura sezione salvata e in attesa di invio automatico.'
-      )
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : ''
+
+      const isNetworkLikeError =
+        message.includes('failed to fetch') ||
+        message.includes('network') ||
+        message.includes('timeout') ||
+        !navigator.onLine
+
+      if (isNetworkLikeError) {
+        addToOfflineQueue(
+          '/api/riapri',
+          {
+            sezione: sectionNumber,
+          },
+          'riapri'
+        )
+        setFeedback(
+          'warning',
+          'Connessione assente. Riapertura sezione salvata e in attesa di invio automatico.'
+        )
+      } else {
+        setFeedback(
+          'error',
+          error instanceof Error ? error.message : 'Errore riapertura sezione'
+        )
+      }
+
       scrollTopSmooth()
       console.error(error)
     } finally {
