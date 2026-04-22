@@ -28,6 +28,7 @@ type ConfigData = {
   consiglieri1: string[]
   consiglieri2: string[]
   elettoriSezioni?: number[]
+  elettori_sezioni?: number[]
 }
 
 type LiveRow = {
@@ -263,10 +264,14 @@ export default function SezionePage() {
   useEffect(() => {
     if (!config || !Number.isFinite(sectionNumber)) return
 
-    const value = Array.isArray(config.elettoriSezioni)
-      ? Number(config.elettoriSezioni[sectionNumber - 1] || 0)
-      : 0
+    const elettoriArray =
+      Array.isArray(config.elettoriSezioni)
+        ? config.elettoriSezioni
+        : Array.isArray(config.elettori_sezioni)
+          ? config.elettori_sezioni
+          : []
 
+    const value = Number(elettoriArray[sectionNumber - 1] || 0)
     setElettoriSezione(value)
   }, [config, sectionNumber])
 
