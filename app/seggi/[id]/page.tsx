@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 
 const API_BASE = 'https://diretta-radio-api.francesco-statello88.workers.dev'
@@ -27,6 +28,8 @@ type ConfigData = {
   lista2: string
   consiglieri1: string[]
   consiglieri2: string[]
+  consiglieri_lista1?: string[]
+  consiglieri_lista2?: string[]
   elettoriSezioni?: number[]
   elettori_sezioni?: number[]
 }
@@ -148,6 +151,46 @@ function normalizeSession(raw: string | null): SessionUser | null {
   }
 }
 
+function safeString(value: unknown, fallback = '') {
+  return typeof value === 'string' ? value : fallback
+}
+
+function safeStringArray(value: unknown, length: number) {
+  if (!Array.isArray(value)) return Array(length).fill('')
+  return [...value.map((v) => (typeof v === 'string' ? v : '')), ...Array(length).fill('')].slice(0, length)
+}
+
+function safeNumberArray(value: unknown, length = 6) {
+  if (!Array.isArray(value)) return Array(length).fill(0)
+  return [...value.map((v) => Number(v || 0)), ...Array(length).fill(0)].slice(0, length)
+}
+
+function normalizeServerConfig(raw: unknown): ConfigData | null {
+  const wrapper = raw as { config?: unknown } | null
+  const source = wrapper && typeof wrapper === 'object' && 'config' in wrapper ? wrapper.config : raw
+
+  if (!source || typeof source !== 'object') return null
+
+  const obj = source as Record<string, unknown>
+
+  const consiglieri1 = safeStringArray(obj.consiglieri_lista1 || obj.consiglieri1, 12)
+  const consiglieri2 = safeStringArray(obj.consiglieri_lista2 || obj.consiglieri2, 12)
+  const elettori = safeNumberArray(obj.elettori_sezioni || obj.elettoriSezioni, 6)
+
+  return {
+    sindaco1: safeString(obj.sindaco1),
+    sindaco2: safeString(obj.sindaco2),
+    lista1: safeString(obj.lista1),
+    lista2: safeString(obj.lista2),
+    consiglieri1,
+    consiglieri2,
+    consiglieri_lista1: consiglieri1,
+    consiglieri_lista2: consiglieri2,
+    elettoriSezioni: elettori,
+    elettori_sezioni: elettori,
+  }
+}
+
 export default function SezionePage() {
   const params = useParams()
   const router = useRouter()
@@ -222,22 +265,13 @@ export default function SezionePage() {
   useEffect(() => {
     if (!authChecked) return
 
-    const savedConfig = localStorage.getItem('config')
-    if (savedConfig) {
-      try {
-        setConfig(JSON.parse(savedConfig))
-      } catch {
-        setConfig(null)
-      }
-    } else {
-      setConfig(null)
-    }
-
+    loadConfigFromServer()
     loadDraftOnly()
     loadLiveSection()
     setOfflineQueueCount(getOfflineQueue().length)
 
     const onFocus = () => {
+      loadConfigFromServer()
       loadLiveSection()
       processOfflineQueue({ silentSuccess: true })
     }
@@ -290,6 +324,45 @@ export default function SezionePage() {
     consiglieriLista1,
     consiglieriLista2,
   ])
+
+  async function loadConfigFromServer() {
+    try {
+      const res = await fetch(`${API_BASE}/api/config`, {
+        method: 'GET',
+        cache: 'no-store',
+      })
+
+      const data = await res.json().catch(() => null)
+      const normalized = normalizeServerConfig(data)
+
+      if (res.ok && normalized) {
+        setConfig(normalized)
+        localStorage.setItem('config', JSON.stringify(normalized))
+        return
+      }
+
+      loadConfigFromLocalStorage()
+    } catch {
+      loadConfigFromLocalStorage()
+    }
+  }
+
+  function loadConfigFromLocalStorage() {
+    try {
+      const savedConfig = localStorage.getItem('config')
+      if (!savedConfig) {
+        setConfig(null)
+        return
+      }
+
+      const parsed = JSON.parse(savedConfig)
+      const normalized = normalizeServerConfig(parsed)
+
+      setConfig(normalized)
+    } catch {
+      setConfig(null)
+    }
+  }
 
   function emptyDraft(): DraftData {
     return {
@@ -1580,83 +1653,30 @@ export default function SezionePage() {
       </div>
 
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
-        <TabButton
-          active={activeTab === 'affluenza'}
-          onClick={() => setActiveTab('affluenza')}
-          label="Affluenza"
-        />
-        <TabButton
-          active={activeTab === 'sindaco'}
-          onClick={() => setActiveTab('sindaco')}
-          label="Sindaco"
-        />
-        <TabButton
-          active={activeTab === 'liste'}
-          onClick={() => setActiveTab('liste')}
-          label="Liste"
-        />
-        <TabButton
-          active={activeTab === 'lista1'}
-          onClick={() => setActiveTab('lista1')}
-          label={config?.lista1 || 'Lista X'}
-        />
-        <TabButton
-          active={activeTab === 'lista2'}
-          onClick={() => setActiveTab('lista2')}
-          label={config?.lista2 || 'Lista Y'}
-        />
+        <TabButton active={activeTab === 'affluenza'} onClick={() => setActiveTab('affluenza')} label="Affluenza" />
+        <TabButton active={activeTab === 'sindaco'} onClick={() => setActiveTab('sindaco')} label="Sindaco" />
+        <TabButton active={activeTab === 'liste'} onClick={() => setActiveTab('liste')} label="Liste" />
+        <TabButton active={activeTab === 'lista1'} onClick={() => setActiveTab('lista1')} label={config?.lista1 || 'Lista X'} />
+        <TabButton active={activeTab === 'lista2'} onClick={() => setActiveTab('lista2')} label={config?.lista2 || 'Lista Y'} />
       </div>
 
       {activeTab === 'affluenza' && (
-        <Card
-          title="Affluenza"
-          action={<SmallTransmitButton onClick={transmitAffluenza} disabled={inputsDisabled} />}
-        >
+        <Card title="Affluenza" action={<SmallTransmitButton onClick={transmitAffluenza} disabled={inputsDisabled} />}>
           <div className="grid gap-3 md:grid-cols-2">
-            <ReadOnlyInput
-              label="Elettori sezione"
-              value={elettoriSezione > 0 ? String(elettoriSezione) : 'Non configurati'}
-            />
-            <NumberInput
-              label="Votanti"
-              value={votanti}
-              onChange={setVotanti}
-              disabled={inputsDisabled}
-            />
-            <NumberInput
-              label="Schede bianche"
-              value={schedeBianche}
-              onChange={setSchedeBianche}
-              disabled={inputsDisabled}
-            />
-            <NumberInput
-              label="Schede nulle"
-              value={schedeNulle}
-              onChange={setSchedeNulle}
-              disabled={inputsDisabled}
-            />
+            <ReadOnlyInput label="Elettori sezione" value={elettoriSezione > 0 ? String(elettoriSezione) : 'Non configurati'} />
+            <NumberInput label="Votanti" value={votanti} onChange={setVotanti} disabled={inputsDisabled} />
+            <NumberInput label="Schede bianche" value={schedeBianche} onChange={setSchedeBianche} disabled={inputsDisabled} />
+            <NumberInput label="Schede nulle" value={schedeNulle} onChange={setSchedeNulle} disabled={inputsDisabled} />
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-3 text-sm font-bold text-slate-800">Controllo verbale</div>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <MiniInfoCard
-                label="Votanti dichiarati"
-                value={controlloVerbale.votantiNum !== null ? String(controlloVerbale.votantiNum) : '-'}
-              />
-              <MiniInfoCard
-                label="Totale voti sindaci"
-                value={String(controlloVerbale.totaleSindaci)}
-              />
-              <MiniInfoCard
-                label="Schede totali"
-                value={String(controlloVerbale.totaleSchede)}
-              />
-              <MiniInfoCard
-                label="Affluenza %"
-                value={affluenzaDraft ? `${affluenzaDraft}%` : '-'}
-              />
+              <MiniInfoCard label="Votanti dichiarati" value={controlloVerbale.votantiNum !== null ? String(controlloVerbale.votantiNum) : '-'} />
+              <MiniInfoCard label="Totale voti sindaci" value={String(controlloVerbale.totaleSindaci)} />
+              <MiniInfoCard label="Schede totali" value={String(controlloVerbale.totaleSchede)} />
+              <MiniInfoCard label="Affluenza %" value={affluenzaDraft ? `${affluenzaDraft}%` : '-'} />
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -1681,54 +1701,25 @@ export default function SezionePage() {
       )}
 
       {activeTab === 'sindaco' && (
-        <Card
-          title="Sindaco"
-          action={<SmallTransmitButton onClick={transmitSindaco} disabled={inputsDisabled} />}
-        >
+        <Card title="Sindaco" action={<SmallTransmitButton onClick={transmitSindaco} disabled={inputsDisabled} />}>
           <div className="grid gap-3 md:grid-cols-2">
-            <NumberInput
-              label={config?.sindaco1 || 'Sindaco 1'}
-              value={sindaco1}
-              onChange={setSindaco1}
-              disabled={inputsDisabled}
-            />
-            <NumberInput
-              label={config?.sindaco2 || 'Sindaco 2'}
-              value={sindaco2}
-              onChange={setSindaco2}
-              disabled={inputsDisabled}
-            />
+            <NumberInput label={config?.sindaco1 || 'Sindaco 1'} value={sindaco1} onChange={setSindaco1} disabled={inputsDisabled} />
+            <NumberInput label={config?.sindaco2 || 'Sindaco 2'} value={sindaco2} onChange={setSindaco2} disabled={inputsDisabled} />
           </div>
         </Card>
       )}
 
       {activeTab === 'liste' && (
-        <Card
-          title="Liste"
-          action={<SmallTransmitButton onClick={transmitListe} disabled={inputsDisabled} />}
-        >
+        <Card title="Liste" action={<SmallTransmitButton onClick={transmitListe} disabled={inputsDisabled} />}>
           <div className="grid gap-3 md:grid-cols-2">
-            <NumberInput
-              label={config?.lista1 || 'Lista X'}
-              value={lista1}
-              onChange={setLista1}
-              disabled={inputsDisabled}
-            />
-            <NumberInput
-              label={config?.lista2 || 'Lista Y'}
-              value={lista2}
-              onChange={setLista2}
-              disabled={inputsDisabled}
-            />
+            <NumberInput label={config?.lista1 || 'Lista X'} value={lista1} onChange={setLista1} disabled={inputsDisabled} />
+            <NumberInput label={config?.lista2 || 'Lista Y'} value={lista2} onChange={setLista2} disabled={inputsDisabled} />
           </div>
         </Card>
       )}
 
       {activeTab === 'lista1' && (
-        <Card
-          title={config?.lista1 || 'Consiglieri Lista X'}
-          action={<SmallTransmitButton onClick={transmitConsiglieriLista1} disabled={inputsDisabled} />}
-        >
+        <Card title={config?.lista1 || 'Consiglieri Lista X'} action={<SmallTransmitButton onClick={transmitConsiglieriLista1} disabled={inputsDisabled} />}>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {consiglieriLista1.map((value, index) => (
               <NumberInput
@@ -1748,10 +1739,7 @@ export default function SezionePage() {
       )}
 
       {activeTab === 'lista2' && (
-        <Card
-          title={config?.lista2 || 'Consiglieri Lista Y'}
-          action={<SmallTransmitButton onClick={transmitConsiglieriLista2} disabled={inputsDisabled} />}
-        >
+        <Card title={config?.lista2 || 'Consiglieri Lista Y'} action={<SmallTransmitButton onClick={transmitConsiglieriLista2} disabled={inputsDisabled} />}>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {consiglieriLista2.map((value, index) => (
               <NumberInput
@@ -1840,12 +1828,8 @@ export default function SezionePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-2 text-2xl">✅</div>
-            <div className="text-lg font-bold text-slate-900">
-              Invio automatico completato
-            </div>
-            <div className="mt-2 text-sm text-slate-600">
-              {queueSentMessage}
-            </div>
+            <div className="text-lg font-bold text-slate-900">Invio automatico completato</div>
+            <div className="mt-2 text-sm text-slate-600">{queueSentMessage}</div>
 
             <div className="mt-5">
               <button
@@ -1891,8 +1875,8 @@ function Card({
   children,
 }: {
   title: string
-  action: React.ReactNode
-  children: React.ReactNode
+  action: ReactNode
+  children: ReactNode
 }) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1938,9 +1922,7 @@ function NumberInput({
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-        {label}
-      </label>
+      <label className="mb-1.5 block text-sm font-semibold text-slate-700">{label}</label>
       <input
         type="text"
         inputMode="numeric"
@@ -1970,9 +1952,7 @@ function ReadOnlyInput({
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-        {label}
-      </label>
+      <label className="mb-1.5 block text-sm font-semibold text-slate-700">{label}</label>
       <div className="w-full rounded-xl border border-slate-200 bg-slate-100 px-4 py-3 text-lg text-slate-700">
         {value}
       </div>
@@ -1989,9 +1969,7 @@ function MiniInfoCard({
 }) {
   return (
     <div className="rounded-xl bg-slate-50 px-4 py-3">
-      <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        {label}
-      </div>
+      <div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 text-lg font-bold text-slate-900">{value}</div>
     </div>
   )
@@ -2017,11 +1995,8 @@ function ControlResult({
         ? 'border-red-200 bg-red-50 text-red-800'
         : 'border-slate-200 bg-slate-50 text-slate-700'
 
-  const title =
-    ok === true ? 'OK' : ok === false ? 'Errore' : 'In attesa dati'
-
-  const text =
-    ok === true ? okText : ok === false ? errorText : idleText
+  const title = ok === true ? 'OK' : ok === false ? 'Errore' : 'In attesa dati'
+  const text = ok === true ? okText : ok === false ? errorText : idleText
 
   return (
     <div className={`rounded-xl border px-4 py-3 ${className}`}>
