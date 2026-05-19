@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 
 const API_BASE = 'https://diretta-radio-api.francesco-statello88.workers.dev'
@@ -47,23 +48,30 @@ type DbUserRow = {
   sezioni: number[] | null
 }
 
+type ServerConfig = {
+  anno?: number | string | null
+  totale_sezioni?: number | string | null
+  sindaco1?: string | null
+  sindaco2?: string | null
+  lista1?: string | null
+  lista2?: string | null
+
+  // Compatibilità doppia: Worker attuale + nomi vecchi
+  consiglieri1?: string[] | null
+  consiglieri2?: string[] | null
+  consiglieri_lista1?: string[] | null
+  consiglieri_lista2?: string[] | null
+
+  elettori_sezioni?: number[] | null
+  plesso1_nome?: string | null
+  plesso1_sezioni?: number[] | string | null
+  plesso2_nome?: string | null
+  plesso2_sezioni?: number[] | string | null
+}
+
 type ServerConfigResponse = {
   ok?: boolean
-  config?: {
-    anno?: number | string | null
-    totale_sezioni?: number | string | null
-    sindaco1?: string | null
-    sindaco2?: string | null
-    lista1?: string | null
-    lista2?: string | null
-    consiglieri_lista1?: string[] | null
-    consiglieri_lista2?: string[] | null
-    elettori_sezioni?: number[] | null
-    plesso1_nome?: string | null
-    plesso1_sezioni?: number[] | string | null
-    plesso2_nome?: string | null
-    plesso2_sezioni?: number[] | string | null
-  } | null
+  config?: ServerConfig | null
 }
 
 type WorkerErrorResponse = {
@@ -161,15 +169,24 @@ function normalizeSezioniText(value: unknown, fallback: string) {
     return arr.length > 0 ? arr.join(',') : fallback
   }
 
-  if (typeof value === 'string' && value.trim()) {
-    return value
-  }
+  if (typeof value === 'string' && value.trim()) return value
 
   return fallback
 }
 
 function uniqNumbers(values: number[]) {
   return Array.from(new Set(values)).sort((a, b) => a - b)
+}
+
+function parseSezioniInput(value: string) {
+  return uniqNumbers(
+    value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0)
+  )
 }
 
 export default function ConfigurazionePage() {
@@ -221,14 +238,7 @@ export default function ConfigurazionePage() {
       const session = normalizeSession(localStorage.getItem('session'))
       const authToken = localStorage.getItem('auth_token') || ''
 
-      if (!session) {
-        localStorage.removeItem('session')
-        localStorage.removeItem('auth_token')
-        router.replace('/login')
-        return
-      }
-
-      if (!authToken) {
+      if (!session || !authToken) {
         localStorage.removeItem('session')
         localStorage.removeItem('auth_token')
         router.replace('/login')
@@ -251,9 +261,7 @@ export default function ConfigurazionePage() {
 
       await Promise.allSettled([loadServerConfig(), loadUsers(authToken)])
 
-      if (mounted) {
-        setPageLoading(false)
-      }
+      if (mounted) setPageLoading(false)
     }
 
     bootstrap().catch((err) => {
@@ -267,6 +275,32 @@ export default function ConfigurazionePage() {
       mounted = false
     }
   }, [router])
+
+  function syncConfigWithLocalStorage(partial: Partial<ConfigData>) {
+    try {
+      const raw = localStorage.getItem('config')
+      const existing: ConfigData = raw
+        ? JSON.parse(raw)
+        : {
+            sindaco1: '',
+            sindaco2: '',
+            lista1: '',
+            lista2: '',
+            consiglieri1: [...EMPTY_12],
+            consiglieri2: [...EMPTY_12],
+            elettoriSezioni: [...EMPTY_6_NUM],
+          }
+
+      const updated: ConfigData = {
+        ...existing,
+        ...partial,
+      }
+
+      localStorage.setItem('config', JSON.stringify(updated))
+    } catch {
+      // ignore
+    }
+  }
 
   function loadLocalConfig() {
     const saved = localStorage.getItem('config')
@@ -326,26 +360,36 @@ export default function ConfigurazionePage() {
 
       const data = (await res.json().catch(() => ({}))) as ServerConfigResponse
 
-      if (!res.ok || !data?.ok || !data?.config) {
-        return
-      }
+      if (!res.ok || !data?.ok || !data?.config) return
 
       const config = data.config
 
-      setSindaco1((prev) => safeString(config.sindaco1, prev))
-      setSindaco2((prev) => safeString(config.sindaco2, prev))
-      setLista1((prev) => safeString(config.lista1, prev))
-      setLista2((prev) => safeString(config.lista2, prev))
+      const serverSindaco1 = safeString(config.sindaco1)
+      const serverSindaco2 = safeString(config.sindaco2)
+      const serverLista1 = safeString(config.lista1)
+      const serverLista2 = safeString(config.lista2)
 
-      setConsiglieri1((prev) => {
-        const normalized = safeStringArray(config.consiglieri_lista1, 12)
-        return normalized.some(Boolean) ? normalized : prev
-      })
+      const serverConsiglieri1 = safeStringArray(
+        config.consiglieri_lista1 || config.consiglieri1,
+        12
+      )
 
-      setConsiglieri2((prev) => {
-        const normalized = safeStringArray(config.consiglieri_lista2, 12)
-        return normalized.some(Boolean) ? normalized : prev
-      })
+      const serverConsiglieri2 = safeStringArray(
+        config.consiglieri_lista2 || config.consiglieri2,
+        12
+      )
+
+      const serverElettori = Array.isArray(config.elettori_sezioni)
+        ? config.elettori_sezioni.map((v) => Number(v || 0))
+        : elettoriSezioni.map((v) => Number(v || 0))
+
+      setSindaco1((prev) => serverSindaco1 || prev)
+      setSindaco2((prev) => serverSindaco2 || prev)
+      setLista1((prev) => serverLista1 || prev)
+      setLista2((prev) => serverLista2 || prev)
+
+      setConsiglieri1((prev) => (serverConsiglieri1.some(Boolean) ? serverConsiglieri1 : prev))
+      setConsiglieri2((prev) => (serverConsiglieri2.some(Boolean) ? serverConsiglieri2 : prev))
 
       if (Array.isArray(config.elettori_sezioni)) {
         setElettoriSezioni(safeNumberArrayToString(config.elettori_sezioni, 6))
@@ -363,9 +407,19 @@ export default function ConfigurazionePage() {
 
       setPlesso1Nome((prev) => safeString(config.plesso1_nome, prev))
       setPlesso2Nome((prev) => safeString(config.plesso2_nome, prev))
-
       setPlesso1Sezioni((prev) => normalizeSezioniText(config.plesso1_sezioni, prev))
       setPlesso2Sezioni((prev) => normalizeSezioniText(config.plesso2_sezioni, prev))
+
+      // IMPORTANTISSIMO: aggiorna anche localStorage con i dati veri del server
+      syncConfigWithLocalStorage({
+        sindaco1: serverSindaco1,
+        sindaco2: serverSindaco2,
+        lista1: serverLista1,
+        lista2: serverLista2,
+        consiglieri1: serverConsiglieri1,
+        consiglieri2: serverConsiglieri2,
+        elettoriSezioni: serverElettori,
+      })
     } catch {
       // keep local defaults
     }
@@ -377,10 +431,7 @@ export default function ConfigurazionePage() {
       setUsersError('')
 
       const currentToken = authTokenOverride || token || localStorage.getItem('auth_token') || ''
-
-      if (!currentToken) {
-        throw new Error('Token mancante. Effettua di nuovo il login.')
-      }
+      if (!currentToken) throw new Error('Token mancante. Effettua di nuovo il login.')
 
       const res = await fetch(`${API_BASE}/api/utenti`, {
         method: 'GET',
@@ -447,52 +498,15 @@ export default function ConfigurazionePage() {
 
   function pulseSaved() {
     setShowSaved(true)
-    setTimeout(() => {
-      setShowSaved(false)
-    }, 1800)
-  }
-
-  function parseSezioniInput(value: string) {
-    return uniqNumbers(
-      value
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map((item) => Number(item))
-        .filter((item) => Number.isInteger(item) && item > 0)
-    )
-  }
-
-  function syncConfigWithLocalStorage(partial: Partial<ConfigData>) {
-    try {
-      const raw = localStorage.getItem('config')
-      const existing: ConfigData = raw
-        ? JSON.parse(raw)
-        : {
-            sindaco1: '',
-            sindaco2: '',
-            lista1: '',
-            lista2: '',
-            consiglieri1: [...EMPTY_12],
-            consiglieri2: [...EMPTY_12],
-            elettoriSezioni: [...EMPTY_6_NUM],
-          }
-
-      const updated: ConfigData = {
-        ...existing,
-        ...partial,
-      }
-
-      localStorage.setItem('config', JSON.stringify(updated))
-    } catch {
-      // ignore
-    }
+    setTimeout(() => setShowSaved(false), 1800)
   }
 
   async function saveConfigToServer(payloadOverride?: Partial<Record<string, unknown>>) {
-    if (!token) {
-      throw new Error('Token mancante. Effettua di nuovo il login.')
-    }
+    const currentToken = token || localStorage.getItem('auth_token') || ''
+    if (!currentToken) throw new Error('Token mancante. Effettua di nuovo il login.')
+
+    const normalizedConsiglieri1 = safeStringArray(consiglieri1, 12)
+    const normalizedConsiglieri2 = safeStringArray(consiglieri2, 12)
 
     const payload = {
       anno: Number(annoElezione || 2026),
@@ -501,8 +515,13 @@ export default function ConfigurazionePage() {
       sindaco2,
       lista1,
       lista2,
-      consiglieri1,
-      consiglieri2,
+
+      // Salvo entrambi i formati per sicurezza
+      consiglieri1: normalizedConsiglieri1,
+      consiglieri2: normalizedConsiglieri2,
+      consiglieri_lista1: normalizedConsiglieri1,
+      consiglieri_lista2: normalizedConsiglieri2,
+
       elettori_sezioni: elettoriSezioni.map((v) => Number(v || 0)),
       plesso1_nome: plesso1Nome,
       plesso1_sezioni: parseSezioniInput(plesso1Sezioni),
@@ -515,7 +534,7 @@ export default function ConfigurazionePage() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${currentToken}`,
       },
       body: JSON.stringify(payload),
     })
@@ -541,14 +560,15 @@ export default function ConfigurazionePage() {
       sindaco2,
       lista1,
       lista2,
-      consiglieri1,
-      consiglieri2,
+      consiglieri1: safeStringArray(consiglieri1, 12),
+      consiglieri2: safeStringArray(consiglieri2, 12),
       elettoriSezioni: elettoriSezioni.map((v) => Number(v || 0)),
     }
 
     try {
       localStorage.setItem('config', JSON.stringify(data))
       await saveConfigToServer()
+      await loadServerConfig()
       pulseSaved()
     } catch (err) {
       alert(`Salvataggio configurazione server fallito: ${err instanceof Error ? err.message : String(err)}`)
@@ -576,6 +596,8 @@ export default function ConfigurazionePage() {
         lista2: '',
         consiglieri1: [...EMPTY_12],
         consiglieri2: [...EMPTY_12],
+        consiglieri_lista1: [...EMPTY_12],
+        consiglieri_lista2: [...EMPTY_12],
       })
 
       setSindaco1('')
@@ -614,6 +636,7 @@ export default function ConfigurazionePage() {
       })
 
       await saveConfigToServer()
+      await loadServerConfig()
       pulseSaved()
     } catch (err) {
       alert(`Salvataggio impostazioni elezione fallito: ${err instanceof Error ? err.message : String(err)}`)
@@ -627,9 +650,7 @@ export default function ConfigurazionePage() {
       setUsersError('')
 
       const currentToken = token || localStorage.getItem('auth_token') || ''
-      if (!currentToken) {
-        throw new Error('Token mancante. Effettua di nuovo il login.')
-      }
+      if (!currentToken) throw new Error('Token mancante. Effettua di nuovo il login.')
 
       const parsedSezioni = newRole === 'admin' ? [] : parseSezioniInput(newSezioni)
 
@@ -676,9 +697,7 @@ export default function ConfigurazionePage() {
       setUsersError('')
 
       const currentToken = token || localStorage.getItem('auth_token') || ''
-      if (!currentToken) {
-        throw new Error('Token mancante. Effettua di nuovo il login.')
-      }
+      if (!currentToken) throw new Error('Token mancante. Effettua di nuovo il login.')
 
       const res = await fetch(`${API_BASE}/api/utenti/${id}`, {
         method: 'DELETE',
@@ -726,9 +745,7 @@ export default function ConfigurazionePage() {
 
       const data = await res.json().catch(() => ({}))
 
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || 'Errore reset database')
-      }
+      if (!res.ok || !data?.ok) throw new Error(data?.error || 'Errore reset database')
 
       localStorage.removeItem('successful-submissions')
 
@@ -774,30 +791,10 @@ export default function ConfigurazionePage() {
     <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
       <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="space-y-2">
-          <ConfigMenuButton
-            active={section === 'nomi'}
-            onClick={() => setSection('nomi')}
-            label="Imposta nomi"
-            tone="blue"
-          />
-          <ConfigMenuButton
-            active={section === 'login'}
-            onClick={() => setSection('login')}
-            label="Login e permessi"
-            tone="violet"
-          />
-          <ConfigMenuButton
-            active={section === 'elezione'}
-            onClick={() => setSection('elezione')}
-            label="Impostazioni elezione"
-            tone="amber"
-          />
-          <ConfigMenuButton
-            active={section === 'critica'}
-            onClick={() => setSection('critica')}
-            label="Area critica"
-            tone="red"
-          />
+          <ConfigMenuButton active={section === 'nomi'} onClick={() => setSection('nomi')} label="Imposta nomi" tone="blue" />
+          <ConfigMenuButton active={section === 'login'} onClick={() => setSection('login')} label="Login e permessi" tone="violet" />
+          <ConfigMenuButton active={section === 'elezione'} onClick={() => setSection('elezione')} label="Impostazioni elezione" tone="amber" />
+          <ConfigMenuButton active={section === 'critica'} onClick={() => setSection('critica')} label="Area critica" tone="red" />
         </div>
       </aside>
 
@@ -807,9 +804,7 @@ export default function ConfigurazionePage() {
             <Box title="Sindaci e Liste" color="blue">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                    Sindaci
-                  </div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Sindaci</div>
                   <div className="space-y-2">
                     <TextInput value={sindaco1} onChange={setSindaco1} placeholder="Nome Sindaco 1" />
                     <TextInput value={sindaco2} onChange={setSindaco2} placeholder="Nome Sindaco 2" />
@@ -817,9 +812,7 @@ export default function ConfigurazionePage() {
                 </div>
 
                 <div>
-                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                    Liste
-                  </div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Liste</div>
                   <div className="space-y-2">
                     <TextInput value={lista1} onChange={setLista1} placeholder="Nome Lista X" />
                     <TextInput value={lista2} onChange={setLista2} placeholder="Nome Lista Y" />
@@ -831,12 +824,7 @@ export default function ConfigurazionePage() {
             <Box title="Consiglieri Lista X" color="amber">
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {consiglieri1.map((value, index) => (
-                  <TextInput
-                    key={index}
-                    value={value}
-                    onChange={(v) => updateCons1(index, v)}
-                    placeholder={`Cons. ${index + 1}`}
-                  />
+                  <TextInput key={index} value={value} onChange={(v) => updateCons1(index, v)} placeholder={`Cons. ${index + 1}`} />
                 ))}
               </div>
             </Box>
@@ -844,28 +832,17 @@ export default function ConfigurazionePage() {
             <Box title="Consiglieri Lista Y" color="rose">
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {consiglieri2.map((value, index) => (
-                  <TextInput
-                    key={index}
-                    value={value}
-                    onChange={(v) => updateCons2(index, v)}
-                    placeholder={`Cons. ${index + 1}`}
-                  />
+                  <TextInput key={index} value={value} onChange={(v) => updateCons2(index, v)} placeholder={`Cons. ${index + 1}`} />
                 ))}
               </div>
             </Box>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <button
-                onClick={handleSaveNames}
-                className="w-full rounded-xl bg-green-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-green-700"
-              >
+              <button onClick={handleSaveNames} className="w-full rounded-xl bg-green-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-green-700">
                 Salva configurazione
               </button>
 
-              <button
-                onClick={() => setShowDeleteConfig(true)}
-                className="w-full rounded-xl bg-red-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-red-700"
-              >
+              <button onClick={() => setShowDeleteConfig(true)} className="w-full rounded-xl bg-red-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-red-700">
                 Cancella configurazione
               </button>
             </div>
@@ -876,16 +853,8 @@ export default function ConfigurazionePage() {
           <>
             <Box title="Crea utente" color="blue">
               <div className="grid gap-3 md:grid-cols-2">
-                <TextInput
-                  value={newUsername}
-                  onChange={setNewUsername}
-                  placeholder="Username"
-                />
-                <TextInput
-                  value={newPassword}
-                  onChange={setNewPassword}
-                  placeholder="Password"
-                />
+                <TextInput value={newUsername} onChange={setNewUsername} placeholder="Username" />
+                <TextInput value={newPassword} onChange={setNewPassword} placeholder="Password" />
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -898,27 +867,11 @@ export default function ConfigurazionePage() {
                   ]}
                 />
 
-                <TextInput
-                  value={newSezioni}
-                  onChange={setNewSezioni}
-                  placeholder="Sezioni assegnate es. 1,2,3,4"
-                />
+                <TextInput value={newSezioni} onChange={setNewSezioni} placeholder="Sezioni assegnate es. 1,2,3,4" />
 
-                <button
-                  onClick={handleAddUser}
-                  className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-violet-700"
-                >
+                <button onClick={handleAddUser} className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-violet-700">
                   Aggiungi utente
                 </button>
-              </div>
-
-              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                <div className="font-bold text-slate-800">Regola accessi</div>
-                <div className="mt-1">
-                  Per gli operatori puoi assegnare una o più sezioni separate da virgola.
-                  Esempio: <span className="font-bold">1,2,3,4</span>
-                </div>
-                <div className="mt-1">Gli admin ignorano il campo sezioni e vedono tutto.</div>
               </div>
             </Box>
 
@@ -936,10 +889,7 @@ export default function ConfigurazionePage() {
               ) : (
                 <div className="space-y-2">
                   {users.map((user) => (
-                    <div
-                      key={user.id}
-                      className="flex flex-col gap-2 rounded-xl bg-slate-50 p-3 md:flex-row md:items-center md:justify-between"
-                    >
+                    <div key={user.id} className="flex flex-col gap-2 rounded-xl bg-slate-50 p-3 md:flex-row md:items-center md:justify-between">
                       <div>
                         <div className="font-bold text-slate-900">{user.username}</div>
                         <div className="text-sm text-slate-500">
@@ -950,10 +900,7 @@ export default function ConfigurazionePage() {
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleDeleteUser(user.id)}
-                        className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700"
-                      >
+                      <button onClick={() => handleDeleteUser(user.id)} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700">
                         Elimina
                       </button>
                     </div>
@@ -968,46 +915,22 @@ export default function ConfigurazionePage() {
           <>
             <Box title="Impostazioni generali elezione" color="blue">
               <div className="grid gap-3 md:grid-cols-2">
-                <TextInput
-                  value={annoElezione}
-                  onChange={setAnnoElezione}
-                  placeholder="Anno elezione"
-                />
-                <TextInput
-                  value={totaleSezioni}
-                  onChange={setTotaleSezioni}
-                  placeholder="Totale sezioni"
-                />
+                <TextInput value={annoElezione} onChange={setAnnoElezione} placeholder="Anno elezione" />
+                <TextInput value={totaleSezioni} onChange={setTotaleSezioni} placeholder="Totale sezioni" />
               </div>
             </Box>
 
             <Box title="Plesso 1" color="amber">
               <div className="grid gap-3 md:grid-cols-2">
-                <TextInput
-                  value={plesso1Nome}
-                  onChange={setPlesso1Nome}
-                  placeholder="Nome plesso 1"
-                />
-                <TextInput
-                  value={plesso1Sezioni}
-                  onChange={setPlesso1Sezioni}
-                  placeholder="Sezioni plesso 1 es. 1,2,3,4"
-                />
+                <TextInput value={plesso1Nome} onChange={setPlesso1Nome} placeholder="Nome plesso 1" />
+                <TextInput value={plesso1Sezioni} onChange={setPlesso1Sezioni} placeholder="Sezioni plesso 1 es. 1,2,3,4" />
               </div>
             </Box>
 
             <Box title="Plesso 2" color="rose">
               <div className="grid gap-3 md:grid-cols-2">
-                <TextInput
-                  value={plesso2Nome}
-                  onChange={setPlesso2Nome}
-                  placeholder="Nome plesso 2"
-                />
-                <TextInput
-                  value={plesso2Sezioni}
-                  onChange={setPlesso2Sezioni}
-                  placeholder="Sezioni plesso 2 es. 5,6"
-                />
+                <TextInput value={plesso2Nome} onChange={setPlesso2Nome} placeholder="Nome plesso 2" />
+                <TextInput value={plesso2Sezioni} onChange={setPlesso2Sezioni} placeholder="Sezioni plesso 2 es. 5,6" />
               </div>
             </Box>
 
@@ -1025,19 +948,12 @@ export default function ConfigurazionePage() {
               </div>
 
               <div className="mt-4 rounded-xl bg-slate-50 px-4 py-4">
-                <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Totale elettori configurati
-                </div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {totaleElettoriConfigurati}
-                </div>
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Totale elettori configurati</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{totaleElettoriConfigurati}</div>
               </div>
             </Box>
 
-            <button
-              onClick={handleSaveElectionSettings}
-              className="w-full rounded-xl bg-green-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-green-700"
-            >
+            <button onClick={handleSaveElectionSettings} className="w-full rounded-xl bg-green-600 py-4 text-lg font-bold text-white shadow-sm hover:bg-green-700">
               Salva impostazioni elezione
             </button>
           </>
@@ -1048,15 +964,11 @@ export default function ConfigurazionePage() {
             <div className="rounded-xl border border-red-200 bg-red-50 p-4">
               <div className="text-lg font-bold text-red-800">Zona pericolosa</div>
               <p className="mt-2 text-sm text-red-700">
-                Qui puoi cancellare tutti i dati test locali e il database live 2026.
-                Usa questo comando solo quando sei sicuro.
+                Qui puoi cancellare tutti i dati test locali e il database live 2026. Usa questo comando solo quando sei sicuro.
               </p>
 
               <div className="mt-4">
-                <button
-                  onClick={() => setShowDangerConfirm(true)}
-                  className="rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-red-700"
-                >
+                <button onClick={() => setShowDangerConfirm(true)} className="rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-red-700">
                   Reset completo dati test
                 </button>
               </div>
@@ -1083,17 +995,11 @@ export default function ConfigurazionePage() {
             </p>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setShowDeleteConfig(false)}
-                className="rounded-xl bg-slate-200 px-4 py-3 font-bold text-slate-800 hover:bg-slate-300"
-              >
+              <button onClick={() => setShowDeleteConfig(false)} className="rounded-xl bg-slate-200 px-4 py-3 font-bold text-slate-800 hover:bg-slate-300">
                 Annulla
               </button>
 
-              <button
-                onClick={handleDeleteConfig}
-                className="rounded-xl bg-red-600 px-4 py-3 font-bold text-white hover:bg-red-700"
-              >
+              <button onClick={handleDeleteConfig} className="rounded-xl bg-red-600 px-4 py-3 font-bold text-white hover:bg-red-700">
                 Sì, cancella
               </button>
             </div>
@@ -1111,11 +1017,7 @@ export default function ConfigurazionePage() {
             </p>
 
             <div className="mt-4">
-              <TextInput
-                value={dangerText}
-                onChange={setDangerText}
-                placeholder="Scrivi CANCELLA TUTTO"
-              />
+              <TextInput value={dangerText} onChange={setDangerText} placeholder="Scrivi CANCELLA TUTTO" />
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
@@ -1212,9 +1114,7 @@ function NumberInput({
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-        {label}
-      </label>
+      <label className="mb-1.5 block text-sm font-semibold text-slate-700">{label}</label>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ''))}
@@ -1256,7 +1156,7 @@ function Box({
 }: {
   title: string
   color: 'blue' | 'amber' | 'rose' | 'red'
-  children: React.ReactNode
+  children: ReactNode
 }) {
   const map = {
     blue: 'bg-blue-100 text-blue-700',
